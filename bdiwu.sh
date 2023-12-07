@@ -6,7 +6,7 @@ function usage {
 cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-i <image name>] [-g <group name>] 
-    [-G <users group id> ] [-T <adduser template>] [-t] [-s]
+    [-G <users group id> ] [-a <adduser template>] [-t | -T] [-s]
     [-- <extra options passed to 'docker build'>]
 
 Builds specified image, creating users from given group.
@@ -18,8 +18,9 @@ Options:
   -g Name of the selected users group, 'docker' or 'administrators' 
      are used if ommited
   -G Id of the primary users group, '100' is used if ommited
-  -T Template file for adduser script, reads ./addusers.template.sh if ommited
+  -a Template file for adduser script, reads ./addusers.template.sh if ommited
   -t Build time-tagged image only, do NOT tag it as latest
+  -T Tag image 'test'
   -s Simmulate, just print out commands
 
 EOU
@@ -36,7 +37,7 @@ brag_and_exit () {
         exit 1
 }
 
-while getopts ":i:f:g:G:T:hts" OPT ; do
+while getopts ":i:f:g:G:a:htTs" OPT ; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -54,11 +55,14 @@ while getopts ":i:f:g:G:T:hts" OPT ; do
         G) # Primary group
             PRIMARY_GROUP_ID="$OPTARG"
             ;;
-        T) # Adduser template
+        a) # Adduser template
             ADDUSER_TEMPLATE="$OPTARG"
             ;;
         t) # Don't tag as lates
-            NO_LATEST=1
+            NO_EXTRA_TAG=1
+            ;;
+        T) # Tag test
+            EXTRA_TAG='test'
             ;;
         s) # Simmulate
             SIMMULATE='echo'
@@ -112,6 +116,8 @@ if [ -z "$DOCKERFILE" ]; then
     brag_and_exit "No docker file"
 fi
 
+EXTRA_TAG="${EXTRA_TAG-latest}"
+
 TIMESTAMP="$(date -u +%Y.%m.%d.%H.%M.%S)"
 TIMED_TAG="${IMG_NAME}:${TIMESTAMP}"
 
@@ -163,6 +169,6 @@ $SIMMULATE docker build \
 
 rm -v "$ADDUSERS_SCRIPT"
 
-if [ -z "$NO_LATEST" ]; then
-    $SIMMULATE docker tag "$TIMED_TAG" "${IMG_NAME}:latest"
+if [ -z "$NO_EXTRA_TAG" ]; then
+    $SIMMULATE docker tag "$TIMED_TAG" "${IMG_NAME}:${EXTRA_TAG}"
 fi
