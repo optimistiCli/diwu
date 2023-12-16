@@ -2,7 +2,10 @@
 
 set -e
 
-ADDUSER_FILE_NAME='addusers.template.sh'
+# Global constants
+
+TEMPLATE_INFIX='template'
+ADDUSER_FILE_NAME="addusers.$TEMPLATE_INFIX.sh"
 DEFAULT_GUEST_SIDE_GROUP_ID='100'
 SEARCH_HOST_SIDE_GROUP=" \
         docker \
@@ -13,20 +16,27 @@ SEARCH_ADDUSERS=" \
         scripts/ \
         ./ \
         "
+SEARCH_TEMPLATES=" \
+        scripts/guest/ \
+        config/ \
+        "
 # Shuld be even number
 MAX_SPLITTER=72
+
+# Functions
 
 function usage {
 cat <<EOU >&2
 Usage:
-  $(basename "$0") [-h] [-i <image name>] [-g <group name>]
-    [-G <users group id> ] [-a <adduser template> | -A] [-t | -T] [-s]
+  $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
+    [-G <users group id> ] [-a <adduser template> | -A] [-t <tag> | -T]
     [-- <extra options passed to 'docker build'>]
 
 Builds specified docker image, creating users from given group.
 
 Options:
   -h Print help and exit
+  -s Simmulate, just print out commands
   -i Image name, current dir name used if ommited
   -f Docker file, if ommited looks for:
      '<image name>.dockerfile', 'Dockerfile'
@@ -37,9 +47,8 @@ Options:
   -a Adduser script template, if ommited looks for '$ADDUSER_FILE_NAME' in:
      '$(sed -E "s/^[[:blank:]]*//; s/[[:blank:]]*$//; s/[[:blank:]]+/', '/g" <<<$SEARCH_ADDUSERS)'
   -A Do not generate adduser script
-  -t Build time-tagged image only, do NOT tag it as latest
-  -T Tag image 'test'
-  -s Simmulate, just print out commands
+  -t Tag image something else instead of 'latest'
+  -T Build time-tagged image only, do NOT tag it as 'latest'
 
 EOU
 }
@@ -64,7 +73,26 @@ moan_and_keep_going () {
         echo "Warning: $ERR_MESSAGE"$'\n' >&2
 }
 
-while getopts ":i:f:g:G:a:htTsA" OPT ; do
+function print_eqs {
+    printf "%${1}s" '' | tr ' ' '='
+}
+
+function detemplate_name {
+    sed -E 's/^(.*)\.'"$TEMPLATE_INFIX"'\.(.*)/\1.\2/' <<<"$1"
+}
+
+function cook_template_re {
+    local VAR
+    local RE
+    for VAR in $1; do
+        RE="${RE}"'s±\$'$VAR'±$'$VAR'±g\; '
+    done
+    eval echo "$RE"
+}
+
+# Start doing stuff
+
+while getopts ":i:f:g:G:a:t:hTsA" OPT ; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -88,11 +116,11 @@ while getopts ":i:f:g:G:a:htTsA" OPT ; do
         A) # No adduser
             NO_ADDUSER=1
             ;;
-        t) # Don't tag as lates
+        T) # Don't tag as lates
             NO_EXTRA_TAG=1
             ;;
-        T) # Tag test
-            EXTRA_TAG='test'
+        t) # Tag test
+            EXTRA_TAG="$OPTARG"
             ;;
         s) # Simmulate
             SIMMULATE='echo'
@@ -164,15 +192,25 @@ if [ -z "$DOCKERFILE" ]; then
     brag_and_exit "No docker file"
 fi
 
-EXTRA_TAG="${EXTRA_TAG-latest}"
+if [ -n "$EXTRA_TAG" ]; then
+    if ! egrep -q '^[a-zA-Z0-9_][a-zA-Z0-9_\.\-]{,127}$' <<<"$EXTRA_TAG"; then
+        brag_and_exit "Strange tag: '$EXTRA_TAG'"
+    fi
+else
+    EXTRA_TAG='latest'
+fi
+
+# All checks should be over at this point
 
 TIMESTAMP="$(date -u +%Y.%m.%d.%H.%M.%S)"
 TIMED_TAG="${IMG_NAME}:${TIMESTAMP}"
 
 TEMP_DIR="$(mktemp -d .diwu_${TIMESTAMP}_XXXXXX)"
 
+ADDUSERS_SCRIPT_NAME="$(detemplate_name "$ADDUSER_FILE_NAME")"
+
 if [ -z "$NO_ADDUSER" ]; then
-    ADDUSERS_SCRIPT="${TEMP_DIR}/addusers.sh"
+    ADDUSERS_SCRIPT="${TEMP_DIR}/${ADDUSERS_SCRIPT_NAME}"
 
     ADDUSERS_LIST="$(cat /etc/group \
         | grep -E "^$HOST_SIDE_GROUP" \
@@ -182,9 +220,7 @@ if [ -z "$NO_ADDUSER" ]; then
 
     TEMPLATE="$(grep -vE -e '^[[:blank:]]*#' -e '^[[:blank:]]*$' "$ADDUSER_TEMPLATE")"
 
-    for VAR in USER_NAME USER_ID USER_GROUP_ID; do
-        RE="${RE}"'s/\$'$VAR'/$'$VAR'/g\; '
-    done
+    ADDUSER_VARS='USER_NAME USER_ID USER_GROUP_ID'
 
     while IFS='' read -r -d $'\n' LINE; do
         IFS=':' read USER_NAME _ USER_ID USER_GROUP_ID _ <<<"$LINE"
@@ -194,7 +230,7 @@ if [ -z "$NO_ADDUSER" ]; then
                     if [ -n "$SEP" ]; then
                         echo ''
                     fi
-                    sed "$(eval echo "$RE")" <<<"${TEMPLATE}"
+                    sed "$(cook_template_re "$ADDUSER_VARS")" <<<"${TEMPLATE}"
                 }>>"$ADDUSERS_SCRIPT"
                 SEP=1
             fi
@@ -204,9 +240,35 @@ if [ -z "$NO_ADDUSER" ]; then
     ADDUSER_OPT="--build-arg ADDUSERS=${ADDUSERS_SCRIPT}"
 fi
 
-function print_eqs {
-    printf "%${1}s" '' | tr ' ' '='
-}
+### DEBUG
+LFTP_NICK=example
+LFTP_PORT=123
+LFTP_USER=auser
+LFTP_SITE=ftp.so.me
+
+EXTRA_VARS_NAMES='LFTP_NICK LFTP_PORT LFTP_USER LFTP_SITE'
+
+EXTRA_RE_COOKED="$(cook_template_re "$EXTRA_VARS_NAMES")"
+### DEBUG
+
+while IFS='' read -r -d $'\n' EXTRA_TEMPLATE_FILE; do
+    EXTRA_COOKED_FILE_NAME="$(detemplate_name "$(basename $EXTRA_TEMPLATE_FILE)")"
+    if [ "$EXTRA_COOKED_FILE_NAME" = "$ADDUSERS_SCRIPT_NAME" ]; then
+        moan_and_keep_going "Prevented cooking addusers script from alternative template"
+        continue
+    fi
+    EXTRA_COOKED_FILE="${TEMP_DIR}/${EXTRA_COOKED_FILE_NAME}"
+    if [ -e "$EXTRA_COOKED_FILE" ]; then
+        moan_and_keep_going "Prevented overwriting cooked file: '$EXTRA_COOKED_FILE_NAME'"
+        continue
+    fi
+    sed "$EXTRA_RE_COOKED" <"$EXTRA_TEMPLATE_FILE" >"$EXTRA_COOKED_FILE"
+done <<<"$( \
+    find $SEARCH_TEMPLATES \
+            -not \( -path '*/.*' -or -path '*/@*' \) \
+            -type f \
+            -name "*.$TEMPLATE_INFIX.*" \
+            )"
 
 if [ -n "$SIMMULATE" ]; then
     while IFS='' read -r -d $'\n' N; do
@@ -215,7 +277,6 @@ if [ -n "$SIMMULATE" ]; then
             continue
         fi
         NL=$(( $(wc -c <<<"$N") - 1 ))
-        echo $NL
         QR=$(( ( ( $MAX_SPLITTER - 3 ) - $NL ) / 2 ))
         if [ $(( $NL % 2 )) -eq 0 ]; then
             # Even
@@ -229,7 +290,7 @@ if [ -n "$SIMMULATE" ]; then
             QR=3
         fi
         UP_SEP="$(print_eqs $QL) $N $(print_eqs $QR)"
-        echo ">$UP_SEP<"; 
+        echo ">$UP_SEP<";
         cat "$P"
         echo ">$(print_eqs $(( $(wc -c <<<"$UP_SEP") - 1 )) )<"
     done <<<"$(ls -1 $TEMP_DIR)"
