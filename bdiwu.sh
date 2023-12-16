@@ -6,7 +6,7 @@ function usage {
 cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-i <image name>] [-g <group name>] 
-    [-G <users group id> ] [-a <adduser template>] [-t | -T] [-s]
+    [-G <users group id> ] [-a <adduser template> | -A] [-t | -T] [-s]
     [-- <extra options passed to 'docker build'>]
 
 Builds specified image, creating users from given group.
@@ -19,6 +19,7 @@ Options:
      are used if ommited
   -G Id of the primary users group, '100' is used if ommited
   -a Template file for adduser script, reads ./addusers.template.sh if ommited
+  -A Do not generate adduser script
   -t Build time-tagged image only, do NOT tag it as latest
   -T Tag image 'test'
   -s Simmulate, just print out commands
@@ -37,7 +38,7 @@ brag_and_exit () {
         exit 1
 }
 
-while getopts ":i:f:g:G:a:htTs" OPT ; do
+while getopts ":i:f:g:G:a:htTsA" OPT ; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -58,6 +59,9 @@ while getopts ":i:f:g:G:a:htTs" OPT ; do
         a) # Adduser template
             ADDUSER_TEMPLATE="$OPTARG"
             ;;
+        A) # No adduser
+            NO_ADDUSER=1
+            ;;
         t) # Don't tag as lates
             NO_EXTRA_TAG=1
             ;;
@@ -72,32 +76,34 @@ done
 
 shift $(( $OPTIND - 1 ))
 
-PRIMARY_GROUP_ID="${PRIMARY_GROUP_ID-100}"
-
-if [ -z "$SECONDARY_GROUP" ]; then
-    for DEF_GR in docker administrators; do
-        if grep -qE "^${DEF_GR}:" /etc/group; then
-            SECONDARY_GROUP="$DEF_GR"
-            break
+if [ -z "$NO_ADDUSER" ]; then
+    PRIMARY_GROUP_ID="${PRIMARY_GROUP_ID-100}"
+    
+    if [ -z "$SECONDARY_GROUP" ]; then
+        for DEF_GR in docker administrators; do
+            if grep -qE "^${DEF_GR}:" /etc/group; then
+                SECONDARY_GROUP="$DEF_GR"
+                break
+            fi
+        done
+    else
+        if ! grep -qE "^${SECONDARY_GROUP}:" /etc/group; then
+            brag_and_exit "Starnge secondary group: '$SECONDARY_GROUP'"
         fi
-    done
-else
-    if ! grep -qE "^${SECONDARY_GROUP}:" /etc/group; then
-        brag_and_exit "Starnge secondary group: '$SECONDARY_GROUP'"
     fi
-fi
-if [ -z "$SECONDARY_GROUP" ]; then
-    brag_and_exit "No secondary group"
+    if [ -z "$SECONDARY_GROUP" ]; then
+        brag_and_exit "No secondary group"
+    fi
+
+    ADDUSER_TEMPLATE="${ADDUSER_TEMPLATE-addusers.template.sh}"
+    if ! [ -e "$ADDUSER_TEMPLATE" ]; then
+        brag_and_exit "No adduser script template: '$ADDUSER_TEMPLATE'"
+    fi
 fi
 
 IMG_NAME="${IMG_NAME-$(basename "$(realpath .)")}"
 if ! grep -qE '^[a-zA-Z][a-zA-Z0-9_\-]*$' <<<"$IMG_NAME"; then
     brag_and_exit "Bad image name: '$IMG_NAME"
-fi
-
-ADDUSER_TEMPLATE="${ADDUSER_TEMPLATE-addusers.template.sh}"
-if ! [ -e "$ADDUSER_TEMPLATE" ]; then
-    brag_and_exit "No adduser script template: '$ADDUSER_TEMPLATE'"
 fi
 
 if [ -z "$DOCKERFILE" ]; then
@@ -121,53 +127,52 @@ EXTRA_TAG="${EXTRA_TAG-latest}"
 TIMESTAMP="$(date -u +%Y.%m.%d.%H.%M.%S)"
 TIMED_TAG="${IMG_NAME}:${TIMESTAMP}"
 
-ADDUSERS_SCRIPT="$(mktemp addusers_${TIMESTAMP}_XXXXXX)"
+if [ -z "$NO_ADDUSER" ]; then
+    ADDUSERS_SCRIPT="$(mktemp addusers_${TIMESTAMP}_XXXXXX)"
+    
+    ADDUSERS_LIST="$(cat /etc/group \
+        | grep -E "^$SECONDARY_GROUP" \
+        | cut -d : -f 4 \
+        | sed 's/,/\n/g'\
+    )"
 
-ADDUSERS_LIST="$(cat /etc/group \
-    | grep -E "^$SECONDARY_GROUP" \
-    | cut -d : -f 4 \
-    | sed 's/,/\n/g'\
-)"
+    TEMPLATE="$(grep -vE -e '^[[:blank:]]*#' -e '^[[:blank:]]*$' "$ADDUSER_TEMPLATE")"
 
-TEMPLATE="$(grep -vE -e '^[[:blank:]]*#' -e '^[[:blank:]]*$' "$ADDUSER_TEMPLATE")"
-#if [ -n "$SIMMULATE" ]; then
-#    echo "======= template ======="
-#    echo "$TEMPLATE"
-#    echo "========================"
-#fi
+    for VAR in USER_NAME USER_ID USER_GROUP_ID; do
+        RE="${RE}"'s/\$'$VAR'/$'$VAR'/g\; '
+    done
 
-for VAR in USER_NAME USER_ID USER_GROUP_ID; do
-    RE="${RE}"'s/\$'$VAR'/$'$VAR'/g\; '
-done
+    while IFS='' read -r -d $'\n' LINE; do
+        IFS=':' read USER_NAME _ USER_ID USER_GROUP_ID _ <<<"$LINE"
+        if [ $USER_GROUP_ID -eq $PRIMARY_GROUP_ID ]; then
+            if grep -Eq "^$USER_NAME$" <<<"$ADDUSERS_LIST"; then
+                {
+                    if [ -n "$SEP" ]; then
+                        echo ''
+                    fi
+                    sed "$(eval echo "$RE")" <<<"${TEMPLATE}"
+                }>>"$ADDUSERS_SCRIPT"
+                SEP=1
+            fi
+        fi;
+    done</etc/passwd
 
-while IFS='' read -r -d $'\n' LINE; do
-    IFS=':' read USER_NAME _ USER_ID USER_GROUP_ID _ <<<"$LINE"
-    if [ $USER_GROUP_ID -eq $PRIMARY_GROUP_ID ]; then
-        if grep -Eq "^$USER_NAME$" <<<"$ADDUSERS_LIST"; then
-            {
-                if [ -n "$SEP" ]; then
-                    echo ''
-                fi
-                sed "$(eval echo "$RE")" <<<"${TEMPLATE}"
-            }>>"$ADDUSERS_SCRIPT"
-            SEP=1
-        fi
-    fi;
-done</etc/passwd
-
-if [ -n "$SIMMULATE" ]; then
-    echo "=== add users script ==="
-    cat "$ADDUSERS_SCRIPT"
-    echo "========================"
+    if [ -n "$SIMMULATE" ]; then
+        echo "=== add users script ==="
+        cat "$ADDUSERS_SCRIPT"
+        echo "========================"
+    fi
+    ADDUSER_OPT="--build-arg ADDUSERS=${ADDUSERS_SCRIPT}"
 fi
 
 $SIMMULATE docker build \
-    --build-arg "ADDUSERS=${ADDUSERS_SCRIPT}" \
     -f "$DOCKERFILE" \
     -t "$TIMED_TAG" \
-    "$@" .
+    $ADDUSER_OPT "$@" .
 
-rm -v "$ADDUSERS_SCRIPT"
+if [ -z "$NO_ADDUSER" ]; then
+    rm -v "$ADDUSERS_SCRIPT"
+fi
 
 if [ -z "$NO_EXTRA_TAG" ]; then
     $SIMMULATE docker tag "$TIMED_TAG" "${IMG_NAME}:${EXTRA_TAG}"
