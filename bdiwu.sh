@@ -2,23 +2,40 @@
 
 set -e
 
+ADDUSER_FILE_NAME='addusers.template.sh'
+DEFAULT_GUEST_SIDE_GROUP_ID='100'
+SEARCH_HOST_SIDE_GROUP=" \
+        docker \
+        administrators \
+        "
+SEARCH_ADDUSERS=" \
+        scripts/users/ \
+        scripts/ \
+        ./ \
+        "
+# Shuld be even number
+MAX_SPLITTER=72
+
 function usage {
 cat <<EOU >&2
 Usage:
-  $(basename "$0") [-h] [-i <image name>] [-g <group name>] 
+  $(basename "$0") [-h] [-i <image name>] [-g <group name>]
     [-G <users group id> ] [-a <adduser template> | -A] [-t | -T] [-s]
     [-- <extra options passed to 'docker build'>]
 
-Builds specified image, creating users from given group.
+Builds specified docker image, creating users from given group.
 
 Options:
   -h Print help and exit
   -i Image name, current dir name used if ommited
-  -f Docker file, '<image name>.dockerfile' or 'Dockerfile' are used if ommited
-  -g Name of the selected users group, 'docker' or 'administrators' 
-     are used if ommited
-  -G Id of the primary users group, '100' is used if ommited
-  -a Template file for adduser script, reads ./addusers.template.sh if ommited
+  -f Docker file, if ommited looks for:
+     '<image name>.dockerfile', 'Dockerfile'
+  -g Name of the selected host-side users group, if ommited tries using:
+     '$(sed -E "s/^[[:blank:]]*//; s/[[:blank:]]*$//; s/[[:blank:]]+/', '/g" <<<$SEARCH_HOST_SIDE_GROUP)'
+  -G Id of the guest-side primary users group, if ommited:
+     $DEFAULT_GUEST_SIDE_GROUP_ID
+  -a Adduser script template, if ommited looks for '$ADDUSER_FILE_NAME' in:
+     '$(sed -E "s/^[[:blank:]]*//; s/[[:blank:]]*$//; s/[[:blank:]]+/', '/g" <<<$SEARCH_ADDUSERS)'
   -A Do not generate adduser script
   -t Build time-tagged image only, do NOT tag it as latest
   -T Tag image 'test'
@@ -38,6 +55,15 @@ brag_and_exit () {
         exit 1
 }
 
+moan_and_keep_going () {
+        if [ -n "$1" ] ; then
+                ERR_MESSAGE="$1"
+        else
+                ERR_MESSAGE='Something is amiss'
+        fi
+        echo "Warning: $ERR_MESSAGE"$'\n' >&2
+}
+
 while getopts ":i:f:g:G:a:htTsA" OPT ; do
     case $OPT in
         h) # Print help and exit
@@ -50,11 +76,11 @@ while getopts ":i:f:g:G:a:htTsA" OPT ; do
         f) # Dockerfile
             DOCKERFILE="$OPTARG"
             ;;
-        g) # Secondary group
-            SECONDARY_GROUP="$OPTARG"
+        g) # Host-side group
+            HOST_SIDE_GROUP="$OPTARG"
             ;;
-        G) # Primary group
-            PRIMARY_GROUP_ID="$OPTARG"
+        G) # Guest-side group id
+            GUEST_SIDE_GROUP_ID="$OPTARG"
             ;;
         a) # Adduser template
             ADDUSER_TEMPLATE="$OPTARG"
@@ -77,27 +103,43 @@ done
 shift $(( $OPTIND - 1 ))
 
 if [ -z "$NO_ADDUSER" ]; then
-    PRIMARY_GROUP_ID="${PRIMARY_GROUP_ID-100}"
-    
-    if [ -z "$SECONDARY_GROUP" ]; then
-        for DEF_GR in docker administrators; do
-            if grep -qE "^${DEF_GR}:" /etc/group; then
-                SECONDARY_GROUP="$DEF_GR"
+    if [ -z "$ADDUSER_TEMPLATE" ]; then
+        for AUSD in $SEARCH_ADDUSERS; do
+            T="${AUSD}/${ADDUSER_FILE_NAME}"
+            if [ -e "$T" ]; then
+                ADDUSER_TEMPLATE="$T"
                 break
             fi
         done
     else
-        if ! grep -qE "^${SECONDARY_GROUP}:" /etc/group; then
-            brag_and_exit "Starnge secondary group: '$SECONDARY_GROUP'"
+        if ! [ -e "$ADDUSER_TEMPLATE" ]; then
+            brag_and_exit "No adduser script template: '$ADDUSER_TEMPLATE'"
         fi
     fi
-    if [ -z "$SECONDARY_GROUP" ]; then
-        brag_and_exit "No secondary group"
-    fi
 
-    ADDUSER_TEMPLATE="${ADDUSER_TEMPLATE-addusers.template.sh}"
-    if ! [ -e "$ADDUSER_TEMPLATE" ]; then
-        brag_and_exit "No adduser script template: '$ADDUSER_TEMPLATE'"
+    if [ -z "$ADDUSER_TEMPLATE" ]; then
+        moan_and_keep_going "No adduser script template found"
+        NO_ADDUSER=1
+    fi
+fi
+
+if [ -z "$NO_ADDUSER" ]; then
+    GUEST_SIDE_GROUP_ID="${GUEST_SIDE_GROUP_ID-$DEFAULT_GUEST_SIDE_GROUP_ID}"
+
+    if [ -z "$HOST_SIDE_GROUP" ]; then
+        for DEF_GR in docker administrators; do
+            if grep -qE "^${DEF_GR}:" /etc/group; then
+                HOST_SIDE_GROUP="$DEF_GR"
+                break
+            fi
+        done
+    else
+        if ! grep -qE "^${HOST_SIDE_GROUP}:" /etc/group; then
+            brag_and_exit "Starnge host-side group: '$HOST_SIDE_GROUP'"
+        fi
+    fi
+    if [ -z "$HOST_SIDE_GROUP" ]; then
+        brag_and_exit "No host-side group"
     fi
 fi
 
@@ -127,11 +169,13 @@ EXTRA_TAG="${EXTRA_TAG-latest}"
 TIMESTAMP="$(date -u +%Y.%m.%d.%H.%M.%S)"
 TIMED_TAG="${IMG_NAME}:${TIMESTAMP}"
 
+TEMP_DIR="$(mktemp -d .diwu_${TIMESTAMP}_XXXXXX)"
+
 if [ -z "$NO_ADDUSER" ]; then
-    ADDUSERS_SCRIPT="$(mktemp addusers_${TIMESTAMP}_XXXXXX)"
-    
+    ADDUSERS_SCRIPT="${TEMP_DIR}/addusers.sh"
+
     ADDUSERS_LIST="$(cat /etc/group \
-        | grep -E "^$SECONDARY_GROUP" \
+        | grep -E "^$HOST_SIDE_GROUP" \
         | cut -d : -f 4 \
         | sed 's/,/\n/g'\
     )"
@@ -144,7 +188,7 @@ if [ -z "$NO_ADDUSER" ]; then
 
     while IFS='' read -r -d $'\n' LINE; do
         IFS=':' read USER_NAME _ USER_ID USER_GROUP_ID _ <<<"$LINE"
-        if [ $USER_GROUP_ID -eq $PRIMARY_GROUP_ID ]; then
+        if [ $USER_GROUP_ID -eq $GUEST_SIDE_GROUP_ID ]; then
             if grep -Eq "^$USER_NAME$" <<<"$ADDUSERS_LIST"; then
                 {
                     if [ -n "$SEP" ]; then
@@ -157,12 +201,38 @@ if [ -z "$NO_ADDUSER" ]; then
         fi;
     done</etc/passwd
 
-    if [ -n "$SIMMULATE" ]; then
-        echo "=== add users script ==="
-        cat "$ADDUSERS_SCRIPT"
-        echo "========================"
-    fi
     ADDUSER_OPT="--build-arg ADDUSERS=${ADDUSERS_SCRIPT}"
+fi
+
+function print_eqs {
+    printf "%${1}s" '' | tr ' ' '='
+}
+
+if [ -n "$SIMMULATE" ]; then
+    while IFS='' read -r -d $'\n' N; do
+        P="${TEMP_DIR}/${N}"
+        if [ -d  "$P" ]; then
+            continue
+        fi
+        NL=$(( $(wc -c <<<"$N") - 1 ))
+        echo $NL
+        QR=$(( ( ( $MAX_SPLITTER - 3 ) - $NL ) / 2 ))
+        if [ $(( $NL % 2 )) -eq 0 ]; then
+            # Even
+            QL=$QR
+        else
+            # Odd
+            QL=$(( $QR - 1 ))
+        fi
+        if [ $QL -lt 3 ]; then
+            QL=3
+            QR=3
+        fi
+        UP_SEP="$(print_eqs $QL) $N $(print_eqs $QR)"
+        echo ">$UP_SEP<"; 
+        cat "$P"
+        echo ">$(print_eqs $(( $(wc -c <<<"$UP_SEP") - 1 )) )<"
+    done <<<"$(ls -1 $TEMP_DIR)"
 fi
 
 $SIMMULATE docker build \
@@ -170,9 +240,7 @@ $SIMMULATE docker build \
     -t "$TIMED_TAG" \
     $ADDUSER_OPT "$@" .
 
-if [ -z "$NO_ADDUSER" ]; then
-    rm -v "$ADDUSERS_SCRIPT"
-fi
+rm -rfv "$TEMP_DIR"
 
 if [ -z "$NO_EXTRA_TAG" ]; then
     $SIMMULATE docker tag "$TIMED_TAG" "${IMG_NAME}:${EXTRA_TAG}"
