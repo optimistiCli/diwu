@@ -38,7 +38,7 @@ cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
     [-G <users group id> ] [-a <adduser template> | -A] [-t <tag> | -T]
-    [-e <vars file>] [-- <extra options passed to 'docker build'>]
+    [-e <vars file>] [-L] [-- <extra options passed to 'docker build'>]
 
 Builds specified docker image, creating users from given group.
 
@@ -59,6 +59,7 @@ Options:
   -T Build time-tagged image only, do NOT tag it as 'latest'
   -e File defining variables for extra templates, if ommited looks for:
      '<image name>.$VARS_FILE_SUFFIX'
+  -L List images with timed tag only and exit
 
 EOU
 }
@@ -121,7 +122,7 @@ function present_list {
 
 # Start doing stuff
 
-while getopts ":i:f:g:G:a:t:e:hTsA" OPT ; do
+while getopts ":i:f:g:G:a:t:e:hTsAL" OPT ; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -157,10 +158,34 @@ while getopts ":i:f:g:G:a:t:e:hTsA" OPT ; do
         s) # Simmulate
             SIMMULATE='echo'
             ;;
+        L) # List anonymous timed tags
+            LIST_ANONYMS=1
+            ;;
     esac
 done
 
 shift $(( $OPTIND - 1 ))
+
+IMG_NAME="${IMG_NAME-$(basename "$(realpath .)")}"
+if ! grep -qE '^[a-zA-Z][a-zA-Z0-9_\-]*$' <<<"$IMG_NAME"; then
+    brag_and_exit "Bad image name: '$IMG_NAME"
+fi
+
+if [ -n "$LIST_ANONYMS" ]; then
+    TIMED_TAG_RE=':[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}:'
+    ALL_IMAGES="$( \
+        docker image ls \
+            | egrep "^${IMG_NAME}[[:blank:]]" \
+            | sed -E 's/[[:blank:]]{1,}/:/; s/[[:blank:]]{1,}/:/; s/[[:blank:]].*//' \
+    )"
+    while IFS='' read -r -d $'\n' L; do
+        ID="$(cut -d ':' -f 3 <<<"$L")"
+        if ! echo "$ALL_IMAGES" | egrep ":${ID}$" | egrep -qv "$TIMED_TAG_RE"; then
+            cut -d ':' -f 1-2 <<<"$L"
+        fi
+    done <<<"$(egrep "$TIMED_TAG_RE" <<<"$ALL_IMAGES")" | sort -u
+    exit 0
+fi
 
 if [ -z "$NO_ADDUSER" ]; then
     if [ -z "$ADDUSER_TEMPLATE" ]; then
@@ -201,11 +226,6 @@ if [ -z "$NO_ADDUSER" ]; then
     if [ -z "$HOST_SIDE_GROUP" ]; then
         brag_and_exit "No host-side group"
     fi
-fi
-
-IMG_NAME="${IMG_NAME-$(basename "$(realpath .)")}"
-if ! grep -qE '^[a-zA-Z][a-zA-Z0-9_\-]*$' <<<"$IMG_NAME"; then
-    brag_and_exit "Bad image name: '$IMG_NAME"
 fi
 
 if [ -z "$DOCKERFILE" ]; then
