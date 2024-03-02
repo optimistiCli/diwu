@@ -44,20 +44,20 @@ Builds specified docker image, creating users from given group.
 
 Options:
   -h Print help and exit
-  -s Simmulate, just print out commands
-  -i Image name, current dir name used if ommited
-  -f Docker file, if ommited looks for:
+  -s Simulate, just print out commands
+  -i Image name, current dir name used if omitted
+  -f Docker file, if omitted looks for:
      '<image name>.dockerfile', 'Dockerfile'
-  -g Name of the selected host-side users group, if ommited tries using:
+  -g Name of the selected host-side users group, if omitted tries using:
      $(present_list "$SEARCH_HOST_SIDE_GROUP")
-  -G Id of the guest-side primary users group, if ommited:
+  -G Id of the guest-side primary users group, if omitted:
      $DEFAULT_GUEST_SIDE_GROUP_ID
-  -a Adduser script template, if ommited looks for '$ADDUSER_FILE_NAME' in:
+  -a Adduser script template, if omitted looks for '$ADDUSER_FILE_NAME' in:
      $(present_list "$SEARCH_ADDUSERS")
   -A Do not generate adduser script
   -t Tag image something else instead of 'latest'
   -T Build time-tagged image only, do NOT tag it as 'latest'
-  -e File defining variables for extra templates, if ommited looks for:
+  -e File defining variables for extra templates, if omitted looks for:
      '<image name>.$VARS_FILE_SUFFIX'
   -L List images with timed tag only and exit
 
