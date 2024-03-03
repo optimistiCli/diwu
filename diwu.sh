@@ -20,13 +20,14 @@ SEARCH_TEMPLATES='
     scripts/guest/
     config/
 '
+# Do **not** edit this one!
 ADDUSER_VARS='
     USER_NAME 
     USER_ID 
     USER_GROUP_ID
 '
-VARS_FILE_SUFFIX='vars.sh'
-# Shuld be even number
+VARS_FILE_SUFFIX='vars.ini'
+# Shuld be an even number
 MAX_SPLITTER=72
 
 # Functions
@@ -92,28 +93,15 @@ function detemplate_name {
     sed -E 's/^(.*)\.'"$TEMPLATE_INFIX"'\.(.*)/\1.\2/' <<<"$1"
 }
 
-function cook_template_re {
-    local VAR
-    local RE
-    for VAR in $(cat /dev/stdin); do
-        RE="${RE}"'s±\$'$VAR'±$'$VAR'±g\; '
-    done
-    eval echo "$RE"
-}
-
 function cook_varsfile_re {
-    local TY4NHUJ6XQ06P3SI="$(set | sed 's/=.*//' | sort)"
-    . "$1" >/dev/null 2>/dev/null
-    cook_template_re <<<"$( \
-        diff \
-            <(echo "$TY4NHUJ6XQ06P3SI") \
-            <(set | sed 's/=.*//' | sort) \
-            | grep -vE \
-                -e '^[^>]' \
-                -e PIPESTATUS \
-                -e TY4NHUJ6XQ06P3SI \
-            | sed -E 's/^>[[:blank:]]*//' \
-    )"
+    local PRE_RE='^[[:blank:]]*([a-z_A-Z][[:alnum:]_]*)[[:blank:]]*=[[:blank:]]*'
+    while IFS='' read -r -d $'\n' VAR_EQ; do
+        echo -n "s%{{$(cut -d '=' -f 1 <<<"$VAR_EQ")}}%$(cut -d '=' -f 2 <<<"$VAR_EQ" | sed 's/%/\\%/g')%g; "
+    done <<<"$( \
+        egrep "${PRE_RE}[^[:blank:]]" \
+        | sed -E "s/[[:blank:]]*$//; s/${PRE_RE}(.*)/\1=\2/" \
+    )" \
+    | sed -E 's/;[[:blank:]]*$//'
 }
 
 function present_list {
@@ -141,7 +129,7 @@ while getopts ":i:f:g:G:a:t:e:hTsAL" OPT ; do
             GUEST_SIDE_GROUP_ID="$OPTARG"
             ;;
         a) # Adduser template
-            ADDUSER_TEMPLATE="$OPTARG"
+            ADDUSER_TEMPLATE_FILE="$OPTARG"
             ;;
         A) # No adduser
             NO_ADDUSER=1
@@ -167,7 +155,7 @@ done
 shift $(( $OPTIND - 1 ))
 
 IMG_NAME="${IMG_NAME-$(basename "$(realpath .)")}"
-if ! grep -qE '^[a-zA-Z][a-zA-Z0-9_\-]*$' <<<"$IMG_NAME"; then
+if ! egrep -q '^[a-zA-Z][a-zA-Z0-9_\-]*$' <<<"$IMG_NAME"; then
     brag_and_exit "Bad image name: '$IMG_NAME"
 fi
 
@@ -188,21 +176,21 @@ if [ -n "$LIST_ANONYMS" ]; then
 fi
 
 if [ -z "$NO_ADDUSER" ]; then
-    if [ -z "$ADDUSER_TEMPLATE" ]; then
+    if [ -z "$ADDUSER_TEMPLATE_FILE" ]; then
         for AUSD in $SEARCH_ADDUSERS; do
             T="${AUSD}/${ADDUSER_FILE_NAME}"
             if [ -e "$T" ]; then
-                ADDUSER_TEMPLATE="$T"
+                ADDUSER_TEMPLATE_FILE="$T"
                 break
             fi
         done
     else
-        if ! [ -e "$ADDUSER_TEMPLATE" ]; then
-            brag_and_exit "No adduser script template: '$ADDUSER_TEMPLATE'"
+        if ! [ -e "$ADDUSER_TEMPLATE_FILE" ]; then
+            brag_and_exit "No adduser script template: '$ADDUSER_TEMPLATE_FILE'"
         fi
     fi
 
-    if [ -z "$ADDUSER_TEMPLATE" ]; then
+    if [ -z "$ADDUSER_TEMPLATE_FILE" ]; then
         moan_and_keep_going "No adduser script template found"
         NO_ADDUSER=1
     fi
@@ -213,13 +201,13 @@ if [ -z "$NO_ADDUSER" ]; then
 
     if [ -z "$HOST_SIDE_GROUP" ]; then
         for DEF_GR in docker administrators; do
-            if grep -qE "^${DEF_GR}:" /etc/group; then
+            if egrep -q "^${DEF_GR}:" /etc/group; then
                 HOST_SIDE_GROUP="$DEF_GR"
                 break
             fi
         done
     else
-        if ! grep -qE "^${HOST_SIDE_GROUP}:" /etc/group; then
+        if ! egrep -q "^${HOST_SIDE_GROUP}:" /etc/group; then
             brag_and_exit "Starnge host-side group: '$HOST_SIDE_GROUP'"
         fi
     fi
@@ -277,34 +265,39 @@ if [ -z "$NO_ADDUSER" ]; then
     ADDUSERS_SCRIPT="${TEMP_DIR}/${ADDUSERS_SCRIPT_NAME}"
 
     ADDUSERS_LIST="$(cat /etc/group \
-        | grep -E "^$HOST_SIDE_GROUP" \
+        | egrep "^$HOST_SIDE_GROUP" \
         | cut -d : -f 4 \
         | sed 's/,/\n/g'\
     )"
 
-    TEMPLATE="$(grep -vE -e '^[[:blank:]]*#' -e '^[[:blank:]]*$' "$ADDUSER_TEMPLATE")"
+    ADDUSER_TEMPLATE="$( \
+        egrep -v \
+            '^[[:blank:]]*(#.*)?$' \
+            "$ADDUSER_TEMPLATE_FILE" \
+    )"
+    ADDUSER_RE="$( \
+        sed -E 's/([^[:blank:]]{1,})/\1 = $\1/' \
+        <<<"$ADDUSER_VARS" \
+        | cook_varsfile_re \
+    )"
 
     while IFS='' read -r -d $'\n' LINE; do
-        IFS=':' read USER_NAME _ USER_ID USER_GROUP_ID _ <<<"$LINE"
-        if [ $USER_GROUP_ID -eq $GUEST_SIDE_GROUP_ID ]; then
-            if grep -Eq "^$USER_NAME$" <<<"$ADDUSERS_LIST"; then
-                {
-                    if [ -n "$SEP" ]; then
-                        echo ''
-                    fi
-                    sed "$(cook_template_re <<<"$ADDUSER_VARS")" <<<"${TEMPLATE}"
-                }>>"$ADDUSERS_SCRIPT"
-                SEP=1
-            fi
-        fi;
-    done</etc/passwd
+        IFS=':' read $(echo $ADDUSER_VARS | sed 's/[[:blank:]]/ _ /; s/$/ _/') <<<"$LINE"
+        if [ $USER_GROUP_ID -eq $GUEST_SIDE_GROUP_ID ] \
+            && egrep -q "^$USER_NAME$" <<<"$ADDUSERS_LIST"
+        then
+            ADDUSER_BUFFER="${ADDUSER_BUFFER+${ADDUSER_BUFFER}$'\n\n'}"
+            ADDUSER_BUFFER="${ADDUSER_BUFFER}$(sed "$(eval "echo \"$ADDUSER_RE\"")" <<<"$ADDUSER_TEMPLATE")"
+        fi
+    done </etc/passwd
+    echo "$ADDUSER_BUFFER" > "$ADDUSERS_SCRIPT"
 
     ADDUSER_OPT="--build-arg ADDUSERS=${ADDUSERS_SCRIPT}"
 fi
 
 if [ -z "$NO_EXTRA_TEMPLATES" ]; then
-    EXTRA_RE_COOKED="$(cook_varsfile_re "$VARS_FILE")"
-    
+    EXTRA_RE_COOKED="$(cook_varsfile_re <"$VARS_FILE")"
+
     while IFS='' read -r -d $'\n' EXTRA_TEMPLATE_FILE; do
         EXTRA_COOKED_FILE_NAME="$(detemplate_name "$(basename $EXTRA_TEMPLATE_FILE)")"
         if [ "$EXTRA_COOKED_FILE_NAME" = "$ADDUSERS_SCRIPT_NAME" ]; then

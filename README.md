@@ -20,7 +20,7 @@ voorbeeld
 │   └── host
 │       └── voorbeeld.sh
 ├── voorbeeld.dockerfile
-└── voorbeeld.vars.sh
+└── voorbeeld.vars.ini
 ```
 * Root dir of the project should be named after the image name, `voorbeeld` (Dutch for 'example') in this case.
 * The docker file should be in the root of the project dir and should preferably be named also after the image: `voorbeeld.dockerfile`.
@@ -28,7 +28,7 @@ voorbeeld
 * The `scripts/host` is for the host-side scripts. It is imho a good practice to name the script that runs the container after the image. The one that comes with this repo is thus named `voorbeeld.sh`. It actually is  very generic: it can be copied and renamed for other projects and used as-is, or as a starting point for something more project-specific.
 * The `scripts/guest` dir contains scripts and script templates used on the guest side. All files named like `<name>.template.<ext>` are considered templates. More on this below.
 * The `config` dir is supposed to contain config files and templates of config files. All files named like `<name>.template.<ext>` are considered templates. More on this below.
-* The vars file `voorbeeld.vars.sh` is used for filling in all the templates in `config` and `scripts/guest` dirs. More on templates below.
+* The vars file `voorbeeld.vars.ini` is used for filling in all the templates in `config` and `scripts/guest` dirs. More on templates below.
 
 ### Building image
 Just run the script in the project dir, it should pick up all the settings.
@@ -62,7 +62,7 @@ removed '.diwu_2024.03.02.14.34.17_eL116r/addusers.sh'
 removed directory '.diwu_2024.03.02.14.34.17_eL116r'
 docker tag voorbeeld:2024.03.02.14.34.17 voorbeeld:latest
 ```
-NB: shell commands are printed without quotes.
+NB: shell commands are printed without quotes, don't panic :-)
 
 ### Running container
 Just run the `scripts/host/voorbeeld.sh` to create and run the container. If you are inside a `screen` session you might want to add the `-w` option to run container in a new screen window. This goes mostly for the interactive images, like this one, with a `vim`.
@@ -90,7 +90,7 @@ NB: Images that have **only** temporal tags get listed by `-L` and thus deleted 
 * **-A** Do not generate adduser script
 * **-t** Tag image something else instead of `latest`
 * **-T** Build time-tagged image only, do NOT tag it as `latest`
-* **-e** File defining variables for extra templates, if omitted looks for `<image name>.vars.sh`
+* **-e** File defining variables for extra templates, if omitted looks for `<image name>.vars.ini`
 * **-L** List images with timed tag only and exit
 
 ## Adding users
@@ -109,7 +109,7 @@ The same GID `100` is passed to `addusers.template.sh` for all users. Another GI
 ## Processing templates
 If some settings in the image need to be easily adjusted, or if several versions of an image with different setting should exist at the same time, then it makes sense to create a custom config, or a bunch of configs, for the image and then fill the values during the build.
 
-This script uses vars for this purpose. By default the script looks for the file named `<image name>.vars.sh` in the project root, but it's often more handy to keep elsewhere and pass the path to it via the `-e` option. If no vars file is found, then templates processing doesn't happen.
+This script uses vars for this purpose. By default the script looks for the file named `<image name>.vars.ini` in the project root, but it's often more handy to keep elsewhere and pass the path to it via the `-e` option. If no vars file is found, then templates processing doesn't happen.
 
 Actually, the vars file is a proper `bash` script that gets sourced by the `diwu.sh` script. This means that caution must be excersized in terms of the access rights to the vars files.
 
