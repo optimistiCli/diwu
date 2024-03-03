@@ -93,13 +93,13 @@ function detemplate_name {
     sed -E 's/^(.*)\.'"$TEMPLATE_INFIX"'\.(.*)/\1.\2/' <<<"$1"
 }
 
-function cook_varsfile_re {
-    local PRE_RE='^[[:blank:]]*([a-z_A-Z][[:alnum:]_]*)[[:blank:]]*=[[:blank:]]*'
+COOK_TEMPLATE_PRE_RE='^[[:blank:]]*([a-z_A-Z][[:alnum:]_]*)[[:blank:]]*=[[:blank:]]*'
+function cook_template_re {
     while IFS='' read -r -d $'\n' VAR_EQ; do
-        echo -n "s%{{$(cut -d '=' -f 1 <<<"$VAR_EQ")}}%$(cut -d '=' -f 2 <<<"$VAR_EQ" | sed 's/%/\\%/g')%g; "
+        echo -n "s%{{$(cut -d '=' -f 1 <<<"$VAR_EQ")}}%$(cut -d '=' -f 2- <<<"$VAR_EQ" | sed 's/%/\\%/g')%g; "
     done <<<"$( \
-        egrep "${PRE_RE}[^[:blank:]]" \
-        | sed -E "s/[[:blank:]]*$//; s/${PRE_RE}(.*)/\1=\2/" \
+        egrep "${COOK_TEMPLATE_PRE_RE}[^[:blank:]]" \
+        | sed -E "s/[[:blank:]]*$//; s/${COOK_TEMPLATE_PRE_RE}(.*)/\1=\2/" \
     )" \
     | sed -E 's/;[[:blank:]]*$//'
 }
@@ -264,10 +264,12 @@ ADDUSERS_SCRIPT_NAME="$(detemplate_name "$ADDUSER_FILE_NAME")"
 if [ -z "$NO_ADDUSER" ]; then
     ADDUSERS_SCRIPT="${TEMP_DIR}/${ADDUSERS_SCRIPT_NAME}"
 
-    ADDUSERS_LIST="$(cat /etc/group \
-        | egrep "^$HOST_SIDE_GROUP" \
-        | cut -d : -f 4 \
-        | sed 's/,/\n/g'\
+    ADDUSERS_LIST="$( \
+        egrep \
+            "^$HOST_SIDE_GROUP" \
+            /etc/group \
+            | cut -d : -f 4 \
+            | sed 's/,/\n/g'\
     )"
 
     ADDUSER_TEMPLATE="$( \
@@ -275,19 +277,28 @@ if [ -z "$NO_ADDUSER" ]; then
             '^[[:blank:]]*(#.*)?$' \
             "$ADDUSER_TEMPLATE_FILE" \
     )"
-    ADDUSER_RE="$( \
-        sed -E 's/([^[:blank:]]{1,})/\1 = $\1/' \
-        <<<"$ADDUSER_VARS" \
-        | cook_varsfile_re \
+
+    ADDUSER_RE_RAW="$( \
+        sed -E \
+            's/([^[:blank:]]{1,})/\1 = $\1/' \
+            <<<"$ADDUSER_VARS" \
+            | cook_template_re \
     )"
 
     while IFS='' read -r -d $'\n' LINE; do
-        IFS=':' read $(echo $ADDUSER_VARS | sed 's/[[:blank:]]/ _ /; s/$/ _/') <<<"$LINE"
+        IFS=':' read $( \
+            echo $ADDUSER_VARS \
+            | sed 's/[[:blank:]]/ _ /; s/$/ _/' \
+        ) <<<"$LINE"
         if [ $USER_GROUP_ID -eq $GUEST_SIDE_GROUP_ID ] \
             && egrep -q "^$USER_NAME$" <<<"$ADDUSERS_LIST"
         then
             ADDUSER_BUFFER="${ADDUSER_BUFFER+${ADDUSER_BUFFER}$'\n\n'}"
-            ADDUSER_BUFFER="${ADDUSER_BUFFER}$(sed "$(eval "echo \"$ADDUSER_RE\"")" <<<"$ADDUSER_TEMPLATE")"
+            ADDUSER_BUFFER="${ADDUSER_BUFFER}$( \
+                sed \
+                    "$(eval "echo \"$ADDUSER_RE_RAW\"")" \
+                    <<<"$ADDUSER_TEMPLATE" \
+            )"
         fi
     done </etc/passwd
     echo "$ADDUSER_BUFFER" > "$ADDUSERS_SCRIPT"
@@ -296,7 +307,7 @@ if [ -z "$NO_ADDUSER" ]; then
 fi
 
 if [ -z "$NO_EXTRA_TEMPLATES" ]; then
-    EXTRA_RE_COOKED="$(cook_varsfile_re <"$VARS_FILE")"
+    EXTRA_RE_COOKED="$(cook_template_re <"$VARS_FILE")"
 
     while IFS='' read -r -d $'\n' EXTRA_TEMPLATE_FILE; do
         EXTRA_COOKED_FILE_NAME="$(detemplate_name "$(basename $EXTRA_TEMPLATE_FILE)")"
