@@ -56,11 +56,11 @@ adduser -g supervisor -s /bin/sh -D -u 1026 supervisor 100
 :nnoremap <F1> :tabprevious<CR>
 :tab all
 >======================================================================<
-docker build -f voorbeeld.dockerfile -t voorbeeld:2024.03.02.14.34.17 --build-arg ADDUSERS=.diwu_2024.03.02.14.34.17_eL116r/addusers.sh --build-arg DIWU_DIR=.diwu_2024.03.02.14.34.17_eL116r .
-removed '.diwu_2024.03.02.14.34.17_eL116r/vim.rc'
-removed '.diwu_2024.03.02.14.34.17_eL116r/addusers.sh'
-removed directory '.diwu_2024.03.02.14.34.17_eL116r'
-docker tag voorbeeld:2024.03.02.14.34.17 voorbeeld:latest
+docker build -f voorbeeld.dockerfile -t voorbeeld:2024.03.03.14.13.33 --build-arg ADDUSERS=.diwu_2024.03.03.14.13.33_Uh4Tp9/addusers.sh --build-arg DIWU_DIR=.diwu_2024.03.03.14.13.33_Uh4Tp9 .
+removed '.diwu_2024.03.03.14.13.33_Uh4Tp9/vim.rc'
+removed '.diwu_2024.03.03.14.13.33_Uh4Tp9/addusers.sh'
+removed directory '.diwu_2024.03.03.14.13.33_Uh4Tp9'
+docker tag voorbeeld:2024.03.03.14.13.33 voorbeeld:latest
 ```
 NB: shell commands are printed without quotes, don't panic :-)
 
