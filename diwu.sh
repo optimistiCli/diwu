@@ -186,7 +186,7 @@ function setup_guest_group {
     G_GUEST_SIDE_GROUP_ID="${G_GUEST_SIDE_GROUP_ID-$G_HOST_SIDE_GROUP_ID}"
 }
 
-function setup_users {
+function run_while_can_cook_addusers {
     while [ -n "$1" ] && [ -z "$G_NO_ADDUSER" ]; do
         "$1"
         shift
@@ -314,6 +314,72 @@ function cook_addusers_script {
     G_ADDUSER_OPT="--build-arg ADDUSERS=${PATH_TO_SCRIPT}"
 }
 
+function cook_extra_templates {
+    local RE="$(cook_template_re <"$G_VARS_FILE")"
+
+    while IFS='' read -r -d $'\n' TEMPLATE_FILE; do
+        local COOKED_FILE_NAME="$(detemplate_name "$(basename $TEMPLATE_FILE)")"
+        if [ "$COOKED_FILE_NAME" = "$G_ADDUSERS_SCRIPT_NAME" ]; then
+            moan_and_keep_going "Prevented cooking addusers script from alternative template"
+            continue
+        fi
+        local COOKED_FILE="${G_TEMP_DIR}/${COOKED_FILE_NAME}"
+        if [ -e "$COOKED_FILE" ]; then
+            moan_and_keep_going "Prevented overwriting cooked file: '$COOKED_FILE_NAME'"
+            continue
+        fi
+        sed "$RE" <"$TEMPLATE_FILE" >"$COOKED_FILE"
+    done <<<"$( \
+        find $C_SEARCH_TEMPLATES \
+                -not \( -path '*/.*' -or -path '*/@*' \) \
+                -type f \
+                -name "*.$C_TEMPLATE_INFIX.*" \
+    )"
+    G_DIWU_DIR_OPT="--build-arg DIWU_DIR=${G_TEMP_DIR}"
+}
+
+function dump_generated {
+    while IFS='' read -r -d $'\n' NAME; do
+        local FILE="${G_TEMP_DIR}/${NAME}"
+        if [ -d  "$FILE" ]; then
+            continue
+        fi
+        local NUM_LETTERS=$(( $(wc -c <<<"$NAME") - 1 ))
+        local LEN_LEFT
+        local LEN_RIGHT=$(( ( ( $C_MAX_SPLITTER - 3 ) - $NUM_LETTERS ) / 2 ))
+        if [ $(( $NUM_LETTERS % 2 )) -eq 0 ]; then
+            # Even
+            LEN_LEFT=$LEN_RIGHT
+        else
+            # Odd
+            LEN_LEFT=$(( $LEN_RIGHT - 1 ))
+        fi
+        if [ $LEN_LEFT -lt 3 ]; then
+            LEN_LEFT=3
+            LEN_RIGHT=3
+        fi
+        local TOP_SEPARATOR="$(print_eqs $LEN_LEFT) $NAME $(print_eqs $LEN_RIGHT)"
+        echo ">$TOP_SEPARATOR<";
+        cat "$FILE"
+        echo ">$(print_eqs $(( $(wc -c <<<"$TOP_SEPARATOR") - 1 )) )<"
+    done <<<"$(ls -1 $G_TEMP_DIR)"
+}
+
+function cook_image {
+    $G_SIMMULATE docker build \
+        -f "$G_DOCKERFILE" \
+        -t "$G_TIMED_TAG" \
+        $G_ADDUSER_OPT $G_DIWU_DIR_OPT "$@" .
+}
+
+function clean_up {
+    rm -rfv "$G_TEMP_DIR"
+}
+
+function assign_extra_tag {
+    $G_SIMMULATE docker tag "$G_TIMED_TAG" "${G_IMG_NAME}:${G_EXTRA_TAG}"
+}
+
 # Start doing stuff
 
 while getopts ":i:f:g:G:a:t:e:hTsAL" OPT ; do
@@ -365,7 +431,7 @@ if [ -n "$G_LIST_ANONYMS_AND_EXIT" ]; then
     list_anonyms
     exit 0
 fi
-setup_users \
+run_while_can_cook_addusers \
     setup_adduser_template_file \
     setup_host_group \
     setup_guest_group
@@ -378,68 +444,17 @@ setup_vars_file
 cook_timed_tag
 cook_temp_dir
 cook_addusers_script_name
-
 if [ -z "$G_NO_ADDUSER" ]; then
     cook_addusers_script
 fi
-
 if [ -z "$NO_EXTRA_TEMPLATES" ]; then
-    EXTRA_RE_COOKED="$(cook_template_re <"$G_VARS_FILE")"
-
-    while IFS='' read -r -d $'\n' EXTRA_TEMPLATE_FILE; do
-        EXTRA_COOKED_FILE_NAME="$(detemplate_name "$(basename $EXTRA_TEMPLATE_FILE)")"
-        if [ "$EXTRA_COOKED_FILE_NAME" = "$G_ADDUSERS_SCRIPT_NAME" ]; then
-            moan_and_keep_going "Prevented cooking addusers script from alternative template"
-            continue
-        fi
-        EXTRA_COOKED_FILE="${G_TEMP_DIR}/${EXTRA_COOKED_FILE_NAME}"
-        if [ -e "$EXTRA_COOKED_FILE" ]; then
-            moan_and_keep_going "Prevented overwriting cooked file: '$EXTRA_COOKED_FILE_NAME'"
-            continue
-        fi
-        sed "$EXTRA_RE_COOKED" <"$EXTRA_TEMPLATE_FILE" >"$EXTRA_COOKED_FILE"
-    done <<<"$( \
-        find $C_SEARCH_TEMPLATES \
-                -not \( -path '*/.*' -or -path '*/@*' \) \
-                -type f \
-                -name "*.$C_TEMPLATE_INFIX.*" \
-    )"
-    DIWU_DIR_OPT="--build-arg DIWU_DIR=${G_TEMP_DIR}"
+    cook_extra_templates
 fi
-
 if [ -n "$G_SIMMULATE" ]; then
-    while IFS='' read -r -d $'\n' N; do
-        P="${G_TEMP_DIR}/${N}"
-        if [ -d  "$P" ]; then
-            continue
-        fi
-        NL=$(( $(wc -c <<<"$N") - 1 ))
-        QR=$(( ( ( $C_MAX_SPLITTER - 3 ) - $NL ) / 2 ))
-        if [ $(( $NL % 2 )) -eq 0 ]; then
-            # Even
-            QL=$QR
-        else
-            # Odd
-            QL=$(( $QR - 1 ))
-        fi
-        if [ $QL -lt 3 ]; then
-            QL=3
-            QR=3
-        fi
-        UP_SEP="$(print_eqs $QL) $N $(print_eqs $QR)"
-        echo ">$UP_SEP<";
-        cat "$P"
-        echo ">$(print_eqs $(( $(wc -c <<<"$UP_SEP") - 1 )) )<"
-    done <<<"$(ls -1 $G_TEMP_DIR)"
+    dump_generated
 fi
-
-$G_SIMMULATE docker build \
-    -f "$G_DOCKERFILE" \
-    -t "$G_TIMED_TAG" \
-    $G_ADDUSER_OPT $DIWU_DIR_OPT "$@" .
-
-rm -rfv "$G_TEMP_DIR"
-
+cook_image "$@"
+clean_up
 if [ -z "$G_NO_EXTRA_TAG" ]; then
-    $G_SIMMULATE docker tag "$G_TIMED_TAG" "${G_IMG_NAME}:${G_EXTRA_TAG}"
+    assign_extra_tag
 fi
