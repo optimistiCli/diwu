@@ -260,17 +260,29 @@ function cook_addusers_script_name {
     )"
 }
 
+function list_group_users {
+    {
+        sed -nE " \
+            /^${G_HOST_SIDE_GROUP}:/{ \
+                s/^([^:]*:){3}([^:]{1,}).*$/\2/; \
+                s/,/\n/g; \
+                p; \
+                q; \
+            } \
+        " \
+        /etc/group
+        sed -nE " \
+            /^([^:]*:){3}${G_HOST_SIDE_GROUP_ID}:/{ \
+                s/:.*//; \
+                p; \
+            } \
+        " \
+        /etc/passwd
+    } | sort -u
+}
+
 function cook_addusers_script {
     local PATH_TO_SCRIPT="${G_TEMP_DIR}/${G_ADDUSERS_SCRIPT_NAME}"
-
-    # TODO: Add main-group users
-    local USERS_LIST="$( \
-        egrep \
-            "^${G_HOST_SIDE_GROUP}:" \
-            /etc/group \
-            | cut -d : -f 4 \
-            | sed 's/,/\n/g'\
-    )"
 
     local TEMPLATE="$( \
         egrep -v \
@@ -300,7 +312,7 @@ function cook_addusers_script {
         # Overriding GID with source host-side group's
         USER_GROUP_ID="$G_GUEST_SIDE_GROUP_ID"
         local BUFFER
-        if egrep -q "^$USER_NAME$" <<<"$USERS_LIST"; then
+        if egrep -q "^$USER_NAME$" <<<"$(list_group_users)"; then
             BUFFER="${BUFFER+${BUFFER}$'\n\n'}"
             BUFFER="${BUFFER}$( \
                 sed \
