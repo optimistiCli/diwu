@@ -88,9 +88,15 @@ moan_and_keep_going () {
         echo "Warning: $ERR_MESSAGE"$'\n' >&2
 }
 
-function get_group_id {
-    egrep "^${1}:" /etc/group \
-        | cut -d : -f 3
+function get_host_group_id {
+    sed -nE " \
+        /^${G_HOST_SIDE_GROUP}:/{ \
+            s/^([^:]*:){2}([^:]{1,}).*$/\2/; \
+            p; \
+            q; \
+        } \
+    " \
+    /etc/group
 }
 
 function print_eqs {
@@ -106,7 +112,6 @@ function cook_template_re {
     while IFS='' read -r -d $'\n' VAR_EQ; do
         IFS='=' read -r VAR_NAME VALUE <<<"$VAR_EQ"
         echo -n "s%{{${VAR_NAME}}}%$(sed 's/%/\\%/g' <<<"$VALUE")%g; "
-        # echo -n "s%{{$(cut -d '=' -f 1 <<<"$VAR_EQ")}}%$(cut -d '=' -f 2- <<<"$VAR_EQ" | sed 's/%/\\%/g')%g; "
     done <<<"$( \
         egrep "${C_TEMPLATE_PRE_RE}[^[:blank:]]" \
         | sed -E "s/[[:blank:]]*$//; s/${C_TEMPLATE_PRE_RE}(.*)/\1=\2/" \
@@ -119,20 +124,35 @@ function present_list {
 }
 
 function list_anonyms {
-    local TIMED_TAG_RE=':[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}:'
-    local ALL_IMAGES="$( \
+    local IMAGES="$( \
         docker image ls \
-            | egrep "^${G_IMG_NAME}[[:blank:]]" \
-            | sed -E 's/[[:blank:]]{1,}/:/; s/[[:blank:]]{1,}/:/; s/[[:blank:]].*//' \
+        | sed -nE " \
+            /^${G_IMG_NAME}[[:blank:]]/{ \
+                s/[[:blank:]]{1,}/:/2; \
+                s/^([^[:blank:]]{1,})[[:blank:]]*([^[:blank:]]{1,}).*/\1:\2/;
+                p; \
+        }"
     )"
-    while IFS='' read -r -d $'\n' LINE; do
-        local ID="$(cut -d ':' -f 3 <<<"$LINE")"
-        if ! egrep ":${ID}$" <<<"$ALL_IMAGES" \
-            | egrep -qv "$TIMED_TAG_RE"
-        then
-            cut -d ':' -f 1-2 <<<"$LINE"
-        fi
-    done <<<"$(egrep "$TIMED_TAG_RE" <<<"$ALL_IMAGES")" | sort -u
+    local IN_RE="$( \
+        sed -nE '
+            /:[0-9]{4}(\.[0-9]{2}){5}:/!{
+                s/^.*://;
+                H;
+            }
+            ${
+                g;
+                s/^\n//;
+                s/\n/)|(/g;
+                p;
+            }
+        ' <<<"$IMAGES" \
+    )"
+    sed -nE " \
+        /:(${IN_RE})$/!{
+            s/:[^:]{1,}$//;
+            p;
+        }
+    " <<<"$IMAGES"
 }
 
 function setup_img_name {
@@ -179,7 +199,7 @@ function setup_host_group {
     if [ -z "$G_HOST_SIDE_GROUP" ]; then
         brag_and_exit "No host-side group"
     fi
-    G_HOST_SIDE_GROUP_ID=$(get_group_id "$G_HOST_SIDE_GROUP")
+    G_HOST_SIDE_GROUP_ID=$(get_host_group_id)
 }
 
 function setup_guest_group {
