@@ -1,16 +1,14 @@
 #!/bin/bash 
 
 # TODO: Option to disable vars warning
-# TODO: Fail (or warn?) if no users
 # TODO: Add addgroup.template.sh
-# TODO: Add option for extra extra templates / templates dirs
 
 set -e
 
 # Global constants
 
 C_TEMPLATE_INFIX='template'
-C_ADDUSER_FILE_NAME="addusers.$C_TEMPLATE_INFIX.sh"
+C_ADDUSERS_FILE_NAME="addusers.$C_TEMPLATE_INFIX.sh"
 C_SEARCH_HOST_SIDE_GROUP='
     docker
     administrators
@@ -25,7 +23,7 @@ C_SEARCH_TEMPLATES='
     config/
 '
 # You do **not** want to edit this one!
-C_ADDUSER_VARS='
+C_ADDUSERS_VARS='
     USER_NAME 
     USER_ID 
     USER_GROUP_ID
@@ -36,12 +34,12 @@ C_MAX_SPLITTER=72
 
 # Functions
 
-function usage {
+usage () {
 cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
-    [-G <users group id> ] [-a <adduser template> | -A] [-t <tag> | -T]
-    [-e <vars file>] [-L] [-- <extra options passed to 'docker build'>]
+    [-G <users group id> ] [-a <addusers template> | -A] [-t <tag> | -T]
+    [-e <vars file> | -E] [-L] [-- <extra docker build options>]
 
 Builds specified docker image, creating users from given group.
 
@@ -54,13 +52,14 @@ Options:
   -g Name of the selected host-side users group, if omitted tries using:
      $(present_list "$C_SEARCH_HOST_SIDE_GROUP")
   -G Id of the guest-side primary users group, if omitted host-side GID is used
-  -a Adduser script template, if omitted looks for '$C_ADDUSER_FILE_NAME' in:
+  -a Addusers script template, if omitted looks for '$C_ADDUSERS_FILE_NAME' in:
      $(present_list "$C_SEARCH_ADDUSERS")
-  -A Do not generate adduser script
+  -A Do not generate addusers script
   -t Tag image something else instead of 'latest'
   -T Build time-tagged image only, do NOT tag it as 'latest'
   -e File defining variables for extra templates, if omitted looks for:
      '<image name>.$C_VARS_FILE_SUFFIX'
+  -E Do not process templates
   -L List images with timed tag only and exit
 
 EOU
@@ -162,24 +161,24 @@ function setup_img_name {
     fi
 }
 
-function setup_adduser_template_file {
-    if [ -z "$G_ADDUSER_TEMPLATE_FILE" ]; then
+function setup_addusers_template_file {
+    if [ -z "$G_ADDUSERS_TEMPLATE_FILE" ]; then
         for DIR in $C_SEARCH_ADDUSERS; do
-            local CANDIDATE="${DIR}/${C_ADDUSER_FILE_NAME}"
+            local CANDIDATE="${DIR}/${C_ADDUSERS_FILE_NAME}"
             if [ -e "$CANDIDATE" ]; then
-                G_ADDUSER_TEMPLATE_FILE="$CANDIDATE"
+                G_ADDUSERS_TEMPLATE_FILE="$CANDIDATE"
                 break
             fi
         done
     else
-        if ! [ -e "$G_ADDUSER_TEMPLATE_FILE" ]; then
-            brag_and_exit "No adduser script template: '$G_ADDUSER_TEMPLATE_FILE'"
+        if ! [ -e "$G_ADDUSERS_TEMPLATE_FILE" ]; then
+            brag_and_exit "No addusers script template: '$G_ADDUSERS_TEMPLATE_FILE'"
         fi
     fi
 
-    if [ -z "$G_ADDUSER_TEMPLATE_FILE" ]; then
-        moan_and_keep_going "No adduser script template found"
-        G_NO_ADDUSER=1
+    if [ -z "$G_ADDUSERS_TEMPLATE_FILE" ]; then
+        moan_and_keep_going "No addusers script template found"
+        G_NO_ADDUSERS=1
     fi
 }
 
@@ -207,7 +206,7 @@ function setup_guest_group {
 }
 
 function run_while_can_cook_addusers {
-    while [ -n "$1" ] && [ -z "$G_NO_ADDUSER" ]; do
+    while [ -n "$1" ] && [ -z "$G_NO_ADDUSERS" ]; do
         "$1"
         shift
     done
@@ -254,13 +253,13 @@ function setup_vars_file {
         G_VARS_FILE="${G_IMG_NAME}.$C_VARS_FILE_SUFFIX"
         if ! [ -e "$G_VARS_FILE" ]; then
             moan_and_keep_going "No variables file found, extra templates will not be processed"
-            NO_EXTRA_TEMPLATES=1
+            G_NO_TEMPLATES=1
         fi
     fi
 }
 
 function cook_timed_tag {
-    G_TIMED_TAG="${G_IMG_NAME}:$( \
+    G_TIME_TAGGED="${G_IMG_NAME}:$( \
         date -u +%Y.%m.%d.%H.%M.%S \
     )"
 }
@@ -268,7 +267,7 @@ function cook_timed_tag {
 function cook_temp_dir {
     G_TEMP_DIR="$( \
         mktemp -d ".$( \
-            echo -n "diwu_${G_TIMED_TAG}_XXXXXX" \
+            echo -n "diwu_${G_TIME_TAGGED}_XXXXXX" \
             | tr -cs 'a-zA-Z0-9' '_' \
         )" \
     )"
@@ -276,7 +275,7 @@ function cook_temp_dir {
 
 function cook_addusers_script_name {
     G_ADDUSERS_SCRIPT_NAME="$( \
-        detemplate_name "$C_ADDUSER_FILE_NAME" \
+        detemplate_name "$C_ADDUSERS_FILE_NAME" \
     )"
 }
 
@@ -307,23 +306,23 @@ function cook_addusers_script {
     local TEMPLATE="$( \
         egrep -v \
             '^[[:blank:]]*(#.*)?$' \
-            "$G_ADDUSER_TEMPLATE_FILE" \
+            "$G_ADDUSERS_TEMPLATE_FILE" \
     )"
 
     local RAW_RE="$( \
         sed -E \
             's/([^[:blank:]]{1,})/\1 = $\1/' \
-            <<<"$C_ADDUSER_VARS" \
+            <<<"$C_ADDUSERS_VARS" \
             | cook_template_re \
     )"
 
-    for VAR_NAME in $C_ADDUSER_VARS; do
+    for VAR_NAME in $C_ADDUSERS_VARS; do
         local $VAR_NAME
     done
 
     while IFS='' read -r -d $'\n' PASSWD_LINE; do
         IFS=':' read $( \
-            echo $C_ADDUSER_VARS \
+            echo $C_ADDUSERS_VARS \
             | sed 's/[[:blank:]]/ _ /; s/$/ _/' \
         ) <<<"$PASSWD_LINE"
         if [ $USER_ID -eq 0 ]; then
@@ -341,9 +340,13 @@ function cook_addusers_script {
             )"
         fi
     done </etc/passwd
-    echo "$BUFFER" > "$PATH_TO_SCRIPT"
-
-    G_ADDUSER_OPT="--build-arg ADDUSERS=${PATH_TO_SCRIPT}"
+    if [ -n "$BUFFER" ]; then
+        echo "$BUFFER" > "$PATH_TO_SCRIPT"
+        G_ADDUSERS_OPT="--build-arg ADDUSERS=${PATH_TO_SCRIPT}"
+    else
+        moan_and_keep_going "No users for the addusers script found"
+        G_NO_ADDUSERS=1
+    fi
 }
 
 function cook_extra_templates {
@@ -400,8 +403,8 @@ function dump_generated {
 function cook_image {
     $G_SIMMULATE docker build \
         -f "$G_DOCKERFILE" \
-        -t "$G_TIMED_TAG" \
-        $G_ADDUSER_OPT $G_DIWU_DIR_OPT "$@" .
+        -t "$G_TIME_TAGGED" \
+        $G_ADDUSERS_OPT $G_DIWU_DIR_OPT "$@" .
 }
 
 function clean_up {
@@ -409,12 +412,12 @@ function clean_up {
 }
 
 function assign_extra_tag {
-    $G_SIMMULATE docker tag "$G_TIMED_TAG" "${G_IMG_NAME}:${G_EXTRA_TAG}"
+    $G_SIMMULATE docker tag "$G_TIME_TAGGED" "${G_IMG_NAME}:${G_EXTRA_TAG}"
 }
 
-# Start doing stuff
+# Read command line options
 
-while getopts ":i:f:g:G:a:t:e:hTsAL" OPT ; do
+while getopts ":i:f:g:G:a:t:e:ThEsAL" OPT ; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -432,11 +435,11 @@ while getopts ":i:f:g:G:a:t:e:hTsAL" OPT ; do
         G) # Guest-side group id
             G_GUEST_SIDE_GROUP_ID="$OPTARG"
             ;;
-        a) # Adduser template
-            G_ADDUSER_TEMPLATE_FILE="$OPTARG"
+        a) # Addusers template
+            G_ADDUSERS_TEMPLATE_FILE="$OPTARG"
             ;;
-        A) # No adduser
-            G_NO_ADDUSER=1
+        A) # No addusers
+            G_NO_ADDUSERS=1
             ;;
         T) # Don't tag as lates
             G_NO_EXTRA_TAG=1
@@ -446,6 +449,9 @@ while getopts ":i:f:g:G:a:t:e:hTsAL" OPT ; do
             ;;
         e) # Vars file
             G_VARS_FILE="$OPTARG"
+            ;;
+        E) # No templates
+            G_NO_TEMPLATES=1
             ;;
         s) # Simmulate
             G_SIMMULATE='echo'
@@ -458,35 +464,39 @@ done
 
 shift $(( $OPTIND - 1 ))
 
+# Check for sanity and set everithing up
+
 setup_img_name
 if [ -n "$G_LIST_ANONYMS_AND_EXIT" ]; then
     list_anonyms
     exit 0
 fi
 run_while_can_cook_addusers \
-    setup_adduser_template_file \
+    setup_addusers_template_file \
     setup_host_group \
     setup_guest_group
 setup_dockerfile
 setup_extra_tag
-setup_vars_file
+if [ -z "$G_NO_TEMPLATES" ]; then
+    setup_vars_file
+fi
 
-# All checks should be over at this point
+# Start cooking
 
 cook_timed_tag
 cook_temp_dir
 cook_addusers_script_name
-if [ -z "$G_NO_ADDUSER" ]; then
+if [ -z "$G_NO_ADDUSERS" ]; then
     cook_addusers_script
 fi
-if [ -z "$NO_EXTRA_TEMPLATES" ]; then
+if [ -z "$G_NO_TEMPLATES" ]; then
     cook_extra_templates
 fi
 if [ -n "$G_SIMMULATE" ]; then
     dump_generated
 fi
 cook_image "$@"
-clean_up
 if [ -z "$G_NO_EXTRA_TAG" ]; then
     assign_extra_tag
 fi
+clean_up
