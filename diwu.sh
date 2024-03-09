@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-# TODO: Option to disable vars warning
+# TODO: Add project dir generation
 # TODO: Add addgroup.template.sh
 
 set -e
@@ -13,6 +13,7 @@ C_SEARCH_HOST_SIDE_GROUP='
     docker
     administrators
 '
+C_DEFAULT_GUEST_SIDE_GID=100
 C_SEARCH_ADDUSERS='
     scripts/users/
     scripts/
@@ -51,7 +52,10 @@ Options:
      '<image name>.dockerfile', 'Dockerfile'
   -g Name of the selected host-side users group, if omitted tries using:
      $(present_list "$C_SEARCH_HOST_SIDE_GROUP")
-  -G Id of the guest-side primary users group, if omitted host-side GID is used
+  -G Id of the guest-side primary users group, if omitted $C_DEFAULT_GUEST_SIDE_GID is used; special 
+     value 'u[ser]' means the host-side main group of particular user is used;
+     gpecial value 'g[roup]' means the source group (the one specified with -g
+     option) is used
   -a Addusers script template, if omitted looks for '$C_ADDUSERS_FILE_NAME' in:
      $(present_list "$C_SEARCH_ADDUSERS")
   -A Do not generate addusers script
@@ -201,8 +205,16 @@ function setup_host_group {
     G_HOST_SIDE_GROUP_ID=$(get_host_group_id)
 }
 
-function setup_guest_group {
-    G_GUEST_SIDE_GROUP_ID="${G_GUEST_SIDE_GROUP_ID-$G_HOST_SIDE_GROUP_ID}"
+function setup_guest_gid {
+    if [ -z "$G_GUEST_SIDE_GID" ]; then
+        G_GUEST_SIDE_GID="$C_DEFAULT_GUEST_SIDE_GID"
+    elif egrep -qi '^u' <<<"$G_GUEST_SIDE_GID"; then
+        G_GUEST_SIDE_GID='U'
+    elif egrep -qi '^g' <<<"$G_GUEST_SIDE_GID"; then
+        G_GUEST_SIDE_GID="$G_HOST_SIDE_GROUP_ID"
+    elif [ "$G_GUEST_SIDE_GID" != "$(tr -dc 0-9 <<<"$G_GUEST_SIDE_GID")" ]; then
+        brag_and_exit "Strange guest-side GID: '$G_GUEST_SIDE_GID'"
+    fi
 }
 
 function run_while_can_cook_addusers {
@@ -302,36 +314,34 @@ function list_group_users {
 
 function cook_addusers_script {
     local PATH_TO_SCRIPT="${G_TEMP_DIR}/${G_ADDUSERS_SCRIPT_NAME}"
-
     local TEMPLATE="$( \
         egrep -v \
             '^[[:blank:]]*(#.*)?$' \
             "$G_ADDUSERS_TEMPLATE_FILE" \
     )"
-
     local RAW_RE="$( \
         sed -E \
             's/([^[:blank:]]{1,})/\1 = $\1/' \
             <<<"$C_ADDUSERS_VARS" \
             | cook_template_re \
     )"
-
     for VAR_NAME in $C_ADDUSERS_VARS; do
         local $VAR_NAME
     done
-
+    local BUFFER
+    local VARS_TO_READ=$( \
+        echo $C_ADDUSERS_VARS \
+        | sed 's/[[:blank:]]/ _ /; s/$/ _/' \
+    )
+    local GROUP_USERS_LIST="$(list_group_users)"
     while IFS='' read -r -d $'\n' PASSWD_LINE; do
-        IFS=':' read $( \
-            echo $C_ADDUSERS_VARS \
-            | sed 's/[[:blank:]]/ _ /; s/$/ _/' \
-        ) <<<"$PASSWD_LINE"
-        if [ $USER_ID -eq 0 ]; then
-            continue
-        fi
-        # Overriding GID with source host-side group's
-        USER_GROUP_ID="$G_GUEST_SIDE_GROUP_ID"
-        local BUFFER
-        if egrep -q "^$USER_NAME$" <<<"$(list_group_users)"; then
+        IFS=':' read $VARS_TO_READ <<<"$PASSWD_LINE"
+        if [ $USER_ID -ne 0 ] \
+            && egrep -q "^$USER_NAME$" <<<"$GROUP_USERS_LIST"
+        then
+            if [ "$G_GUEST_SIDE_GID" != 'U' ]; then
+                USER_GROUP_ID="$G_GUEST_SIDE_GID"
+            fi
             BUFFER="${BUFFER+${BUFFER}$'\n\n'}"
             BUFFER="${BUFFER}$( \
                 sed \
@@ -417,7 +427,7 @@ function assign_extra_tag {
 
 # Read command line options
 
-while getopts ":i:f:g:G:a:t:e:ThEsAL" OPT ; do
+while getopts ":i:f:g:G:a:t:e:ThEsAL" OPT; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -433,7 +443,7 @@ while getopts ":i:f:g:G:a:t:e:ThEsAL" OPT ; do
             G_HOST_SIDE_GROUP="$OPTARG"
             ;;
         G) # Guest-side group id
-            G_GUEST_SIDE_GROUP_ID="$OPTARG"
+            G_GUEST_SIDE_GID="$OPTARG"
             ;;
         a) # Addusers template
             G_ADDUSERS_TEMPLATE_FILE="$OPTARG"
@@ -474,7 +484,7 @@ fi
 run_while_can_cook_addusers \
     setup_addusers_template_file \
     setup_host_group \
-    setup_guest_group
+    setup_guest_gid
 setup_dockerfile
 setup_extra_tag
 if [ -z "$G_NO_TEMPLATES" ]; then
