@@ -1,11 +1,230 @@
-# Docker Image With Users
-Docker build wrapper that:
-1. creates timestamped images so that you can quickly roll back to a previous build;
-1. cooks a guest-side script allowing to replicate in the guest OS users from a host-side group;
-1. fills in config- and script-file templates;
-2. helps remove stale images
+# diwu: Docker Image With Users
+A handy wrapper script for building standalone docker images, primarily interactive ones.
+
+## Main Features
+1. Helps replicate host OS users in the guest OS with the same UIDs.
+2. Creates timestamped docker images so that you can quickly switch to a previous build …
+3. … and then helps manage stale images.
+4. Processes generic templates into guest-side scripts and/or config files.
+
+## Installation
+Just copy the script to some dir on the `$PATH`:
+```bash
+sudo cp -iv diwu.sh /usr/local/bin/
+```
+
+## Prerequisites And Limitations
+Only Linux hosts and guests are currently supported. Running on macOS hosts is probably feasible, but not yet tested.
+
+Diwu relies on GNU basic utils:
+   * bash v.4+ (macOS's v.3 would probably do but testing is needed)
+   * coreutils
+   * find
+   * sed
 
 ## Basic operation
+First off I assume that you are allowed to run docker on your system, i.e. your account is a member of the `docker` group and `/var/run/docker.sock` is assigned to this very group:
+```bash
+$ id -Gn
+users docker
+$ ls -l /var/run/docker.sock 
+srw-rw---- 1 root docker 0 Mar  9 07:16 /var/run/docker.sock
+```
+Let's say you want to run `vim` in a container. You create a dir for your new project, and inside it, you create a docker file:
+
+```bash
+$ tree vimd
+vimd
+└── Dockerfile
+
+1 directory, 1 file
+```
+The docker file doesn't do much, just installs `vim` on a current Ubuntu and designates it as the container's entrypoint.
+```Dockerfile
+FROM ubuntu:rolling
+
+RUN echo Adelante amigos \
+    && export \
+        DEBIAN_FRONTEND='noninteractive' \
+        TZ='Antarctica/Troll' \
+    && apt-get -y update \
+    && apt-get -y upgrade \
+    && apt-get -y dist-upgrade \
+    && apt-get install -y --no-install-recommends \
+        vim \
+    && apt-get -y autoremove \
+    && apt-get -y clean \
+    && apt-get -y autoclean \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo Et voila
+
+ENTRYPOINT ["/usr/bin/vim"]
+```
+To build this image just run diwu in your project dir:
+```bash
+$ diwu.sh
+Warning: No addusers script template found
+
+Warning: No variables file found, extra templates will not be processed
+
+Sending build context to Docker daemon   2.56kB
+Step 1/3 : FROM ubuntu:rolling
+ ---> 483a94112583
+Step 2/3 : RUN echo Adelante amigos     && export         DEBIAN_FRONTEND='noninteractive'         TZ='Antarctica/Troll'     && apt-get -y update     && apt-get -y upgrade     && apt-get -y dist-upgrade     && apt-get install -y --no-install-recommends         vim     && apt-get -y autoremove     && apt-get -y clean     && apt-get -y autoclean     && rm -rf /var/lib/apt/lists/*     && echo Et voila
+ ---> Running in 534dbb87357d
+Adelante amigos
+# yada yada yada
+Et voila
+Removing intermediate container 534dbb87357d
+ ---> fd305516b80c
+Step 3/3 : ENTRYPOINT ["/usr/bin/vim"]
+ ---> Running in b77953f9968b
+Removing intermediate container b77953f9968b
+ ---> 18b6ea18a28c
+Successfully built 18b6ea18a28c
+Successfully tagged vimd:2024.03.15.09.54.51
+removed directory '.diwu_vimd_2024_03_15_09_54_51_OdSQA0'
+```
+The built image is named `vimd` after your project dir. You can specify another name with `-i` option if you like. You have now one image with 2 tags: a timestamp and the `latest` tag:
+```bash
+$ docker image ls vimd
+REPOSITORY   TAG                   IMAGE ID       CREATED          SIZE
+vimd         2024.03.15.09.54.51   18b6ea18a28c   18 minutes ago   176MB
+vimd         latest                18b6ea18a28c   18 minutes ago   176MB
+```
+Now you remember that you have a fancy `.vimrc` and decide to add it to the container:
+```bash
+$ cp -iv ~/.vimrc vim.rc
+$ echo 'COPY vim.rc /etc/vim/vimrc.local' >> Dockerfile
+```
+Run diwu to build it again
+```bash
+$ diwu.sh 
+Warning: No addusers script template found
+
+Warning: No variables file found, extra templates will not be processed
+
+Sending build context to Docker daemon  3.584kB
+Step 1/4 : FROM ubuntu:rolling
+ ---> 483a94112583
+Step 2/4 : RUN echo Adelante amigos     && export         DEBIAN_FRONTEND='noninteractive'         TZ='Antarctica/Troll'     && apt-get -y update     && apt-get -y upgrade     && apt-get -y dist-upgrade     && apt-get install -y --no-install-recommends         vim     && apt-get -y autoremove     && apt-get -y clean     && apt-get -y autoclean     && rm -rf /var/lib/apt/lists/*     && echo Et voila
+ ---> Using cache
+ ---> fd305516b80c
+Step 3/4 : ENTRYPOINT ["/usr/bin/vim"]
+ ---> Using cache
+ ---> 18b6ea18a28c
+Step 4/4 : COPY vim.rc /etc/vim/vimrc.local
+ ---> bdde11b7da11
+Successfully built bdde11b7da11
+Successfully tagged vimd:2024.03.15.10.27.44
+removed directory '.diwu_vimd_2024_03_15_10_27_44_8mO2u5'
+```
+Now you have 2 `vimd` images:
+1. the new one, which includes `vimrc`, is tagged with a timestamp and with the `latest` tag
+1. the first build, without `vimrc`, has now only the timestamp tag
+```bash
+$ docker image ls vimd
+REPOSITORY   TAG                   IMAGE ID       CREATED             SIZE
+vimd         2024.03.15.10.27.44   bdde11b7da11   29 minutes ago      176MB
+vimd         latest                bdde11b7da11   29 minutes ago      176MB
+vimd         2024.03.15.09.54.51   18b6ea18a28c   About an hour ago   176MB
+```
+You can test your dockerized `vim` now:
+```bash
+docker run -it --rm -v "$(pwd)":/mnt --workdir /mnt vimd
+```
+It works (I hope). Now let's say you want to clean up after yourself and remove the stale first image, the one without `vimrc`. Diwu has an `-L` option that lists all the images of the current name (as guessed from the project dir name, or given by `-i` option) that sport only timestamp tags. It is assumed that any image worth keeping is tagged something meaningful, either by diwu, or manually.
+```bash
+$ diwu.sh -L
+vimd:2024.03.15.09.54.51
+```
+You can remove all the stale images in one go like this:
+```bash
+$ docker image rm $(diwu.sh -L)
+Untagged: vimd:2024.03.15.09.54.51
+```
+Now you start using your dockerized vim only to realize that any new file it creates is owned by root – this would not do. To rectify this issue you can just run your container as the current user:
+```bash
+docker run -it --rm -v "$(pwd)":/mnt --workdir /mnt -u $(id -u):$(id -g) vimd
+```
+If all you need is a `vim` then this does the trick. But bear in mind: this user has no home dir in the guest OS and even no name:
+```bash
+$ docker run -it --rm -u $(id -u):$(id -g) --entrypoint /bin/bash vimd
+I have no name!@e7f53485960d:/$
+```
+This invites trouble if you ask me. So let's use diwu to replicate some host-side users.
+
+By default, diwu replicates all users that are members of the `docker` group in the host OS. If there is no `docker` group it tries `administrators`, and if this also fails then it gives up. Alternatively, you could specify another source group via `-g` option.
+
+To activate user replication you need to craete a file named `addusers.template.sh`. This is a template for the guest-side script that adds users while the image is built. You can put this file in the root directory of your project (recommended dir structure and naming conventions are described below). At the time of this writing, the minimum `addusers.template.sh` for Ubuntu guest is as follows:
+```bash
+useradd -u {{USER_ID}} -g {{USER_GROUP_ID}} -m -c '' -p '' {{USER_NAME}}
+```
+Next the processing of the addusers script must be added to the `Dockerfile`:
+```Dockerfile
+FROM ubuntu:rolling
+
+# yada yada yada
+
+ARG ADDUSERS
+COPY $ADDUSERS /tmp/addusers.sh
+RUN /bin/bash /tmp/addusers.sh
+```
+You're good to go now but if you are curious about what the resulting addusers script looks like then why don't you run diwu in simulation mode first:
+```bash
+$ diwu.sh -s
+Warning: No variables file found, extra templates will not be processed
+
+>============================ addusers.sh =============================<
+useradd -u 1001 -g 100 -m -c '' -p '' superuser
+
+useradd -u 1002 -g 100 -m -c '' -p '' supervisor
+>======================================================================<
+docker build -f Dockerfile -t vimd:2024.03.15.12.39.08 --build-arg ADDUSERS=.diwu_vimd_2024_03_15_12_39_08_xuNP4C/addusers.sh .
+docker tag vimd:2024.03.15.12.39.08 vimd:latest
+removed '.diwu_vimd_2024_03_15_12_39_08_xuNP4C/addusers.sh'
+removed directory '.diwu_vimd_2024_03_15_12_39_08_xuNP4C'
+```
+This shows that diwu found 2 users in the `docker` group: `superuser` and `supervisor` with UIDs `1001` and `1002` respectively. Also, you can see that, unless instructed otherwise, diwu assigns GID `100` to all replicated users – read on or just run `diwu -h` to find out how this can be changed.
+
+Now you can run diwu to do what its name suggests it does: build a docker image with users:
+```bash
+$ diwu.sh
+Warning: No variables file found, extra templates will not be processed
+  
+Sending build context to Docker daemon  6.144kB
+Step 1/7 : FROM ubuntu:rolling
+ ---> 483a94112583
+Step 2/7 : RUN echo Adelante amigos     && export         DEBIAN_FRONTEND='noninteractive'         TZ='Antarctica/Troll'     && apt-get -y update     && apt-get -y upgrade     &&
+ apt-get -y dist-upgrade     && apt-get install -y --no-install-recommends         vim     && apt-get -y autoremove     && apt-get -y clean     && apt-get -y autoclean     && rm 
+-rf /var/lib/apt/lists/*     && echo Et voila
+ ---> Using cache
+ ---> fd305516b80c
+Step 3/7 : ENTRYPOINT ["/usr/bin/vim"]
+ ---> Using cache
+ ---> 18b6ea18a28c
+Step 4/7 : COPY vim.rc /etc/vim/vimrc.local
+ ---> Using cache
+ ---> bdde11b7da11
+Step 5/7 : ARG ADDUSERS
+ ---> Running in 68dd20c0861d
+Removing intermediate container 68dd20c0861d
+ ---> 79fa7e2177be
+Step 6/7 : COPY $ADDUSERS /tmp/addusers.sh
+ ---> ceb8a2a457f9
+Step 7/7 : RUN /bin/bash /tmp/addusers.sh
+ ---> Running in 0a5e42ad9a35
+Removing intermediate container 0a5e42ad9a35
+ ---> 83bb84cd2882
+Successfully built 83bb84cd2882
+Successfully tagged vimd:2024.03.15.12.53.27
+removed '.diwu_vimd_2024_03_15_12_53_27_62ZqCO/addusers.sh'
+removed directory '.diwu_vimd_2024_03_15_12_53_27_62ZqCO'
+```
+All the files used in this walkthrough can be found in the `vimd` dir in this repo.
+
+## Proper operation
+
 The `voorbeeld` subdir contains a working example, I will use it to describe the basic operation of this script, or rather scripts. It builds and runs vim in a docker container – pretty useless as such, but works for a guinea pig.
 
 ### Directory structure
@@ -118,11 +337,3 @@ Templates are all files fitting the `<name>.template.<ext>` naming convention fo
 NB: Template variable naming situation will probably be changed / improved further on.
 
 Each template is processed into a file of the same name just without the `template` infix and put into the temp dir mentioned above. If at least one file was generated, then the path to the temp dir is passed to `docker build` via the `DIWU_DIR` argument. Please see the `config/vim.template.rc` and `voorbeeld.dockerfile` for details.
-
-## Limitations
-1. Only tested on Linux hosts with Linux guests
-1. Relies on GNU versions of POSIX utils
-2. Template substitution is a bit of amess
-3. Running script `scripts/host/<image name>.sh` debug-mounting option `-m` recognizes only:
-   * single file COPYs from `config` or `scripts` dirs to full paths
-   * eponymous dockerfiles `<image name>.dockerfile`
