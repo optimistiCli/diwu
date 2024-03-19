@@ -223,12 +223,11 @@ removed directory '.diwu_vimd_2024_03_15_12_53_27_62ZqCO'
 ```
 All the files used in this walkthrough can be found in the `vimd` dir in this repo.
 
-## Proper operation
+## Implied Dir Structure
+The `voorbeeld` (Dutch for “example”) dir of this repo exhibits the structure that is recommended for the diwu projects.
 
-The `voorbeeld` subdir contains a working example, I will use it to describe the basic operation of this script, or rather scripts. It builds and runs vim in a docker container – pretty useless as such, but works for a guinea pig.
-
-### Directory structure
 ```
+$ tree voorbeeld
 voorbeeld
 ├── config
 │   └── vim.template.rc
@@ -240,14 +239,102 @@ voorbeeld
 │       └── voorbeeld.sh
 ├── voorbeeld.dockerfile
 └── voorbeeld.vars.ini
+
+5 directories, 6 files
+
 ```
-* Root dir of the project should be named after the image name, `voorbeeld` (Dutch for 'example') in this case.
-* The docker file should be in the root of the project dir and should preferably be named also after the image: `voorbeeld.dockerfile`.
+### Project Root
+The name of the project root dir sets the name for the project. Docker image name, a bunch of project files' names, container name and hostname all derive from it. It is possible to override this name via `-i` option, but generally, it makes sense to go with the project name as the root dir name.
+### Docker File
+The recommended naming scheme for the docker file is `<project name>.dockerfile`. As it was shown above the traditional `Dockerfile` also works, but such an “impersonal” name can lead to unnecessary confusion. The `-f` option will help if you need to go with some other name for the docker file. 
+### Scripts Dir
+All project scripts and script templates (see below) are supposed to reside in the `scripts` dir. There are 3 distinct kinds of scripts recognized by diwu.
+#### Host Scripts
+Host-side scripts in `scripts/host`; the `voorbeeld` project has only one entry here: a script for running the project's container, see more on it further.
+#### Guest Scripts
+Client-side scripts and templates in `scripts/guest` are meant to be copied to the container by the docker file; the `entrypoint.sh` included with this project only serves to demonstrate diwu's operation: generally speaking, a shell script makes a lousy container entry point.
+#### Addusers Template
+Addusers script template is to be named `addusers.template.sh` and put in the `scripts` dir. As demonstrated above, diwu will also find it in the project's root, but for the sake of general tardiness it's better positioned in the `scripts` dir. The `-a` option allows to use any other file for addusers template and the `-A` stops diwu from searching for it altogether, effectively suppressing the *“No addusers script template found”* warning.
+### Config Dir
+Any config files and templates thereof to be copied into the image go to the `config` dir. It is sometimes tricky to distinguish files belonging here from the ones that should go to the `scripts/guest` dir, but no matter: diwu treats those two dirs without prejudice.
+### Default Vars File
+Unless instructed otherwise, diwu looks for templates vars file named `<project name.vars.ini>` in the project root dir. More on templates and vars file(s) further on.
+## Addusers operation
+Diwu includes a mechanism for replicating in the guest OS the host-side users from a specific group. By default, it replicates members of `docker` or `administrators` group, otherwise the source host-side group can be set via the `-g` option.
+
+User replication is triggered if the addusers script template file is found. Diwu searches for a file named `addusers.template.sh` in `scripts/users`, `scripts` and project root dir consecutively. Otherwise, a template can be specified via the `-a` option. In the absence of an addusers template, the *“No addusers script template found”* warning is displayed.
+
+To stop diwu from replicating users give it a `-A` option. It also suppresses the abovementioned warning.
+
+The addusers template file is an arbitrary shell script, where 3 “double-mustached” variables get substituted with actual values for every replicated user. Empty and commented lines are omitted.
+
+A basic addusers template for an Alpine guest:
+```bash
+# Available variables:
+# {{USER_NAME}}
+# {{USER_ID}}
+# {{USER_GROUP_ID}}
+
+adduser -g {{USER_NAME}} -s /bin/sh -D -u {{USER_ID}} {{USER_NAME}} {{USER_GROUP_ID}}
+```
+The vaiables are:
+* `{{USER_NAME}}` - user's name in the host OS
+* `{{USER_ID}}` - user's UID in the host OS
+* `{{USER_GROUP_ID}}` - guest user's GID, its value depends on the options passed to diwu:
+  * `100` is the default GID if no options are given
+  * the host-side user's actual GID if `-G user` is set
+  * the source host-side group GID if `-G group` is set
+  * an arbitrary number if `-G <number>` is set
+
+Diwu creates an actual addusers script in a temp dir and passes the path to this script to the docker file by adding `--build-arg ADDUSERS=<path>` to `docker build`. To see the generated script and docker invocation parameters please run diwu in simulation mode by adding the `-s` option.
+
+To process the generated addusers script while building the image please add something like this to the docker file:
+```Dockerfile
+ARG ADDUSERS
+COPY $ADDUSERS /tmp/addusers.sh
+RUN /bin/sh /tmp/addusers.sh
+```
+
+
+
+
+
+---------------------
+
+
 * The `scripts/adduser.template.sh` is used to generate the guest-side script that is run from the dockerfile and performs the same operations for every replicated user. This particular script just adds users to the guest OS.
 * The `scripts/host` is for the host-side scripts. It is imho a good practice to name the script that runs the container after the image. The one that comes with this repo is thus named `voorbeeld.sh`. It actually is  very generic: it can be copied and renamed for other projects and used as-is, or as a starting point for something more project-specific.
 * The `scripts/guest` dir contains scripts and script templates used on the guest side. All files named like `<name>.template.<ext>` are considered templates. More on this below.
 * The `config` dir is supposed to contain config files and templates of config files. All files named like `<name>.template.<ext>` are considered templates. More on this below.
 * The vars file `voorbeeld.vars.ini` is used for filling in all the templates in `config` and `scripts/guest` dirs. More on templates below.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### Building image
 Just run the script in the project dir, it should pick up all the settings.
