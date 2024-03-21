@@ -1,0 +1,6 @@
+:set pastetoggle=<f5>
+:set tabstop=4 softtabstop=0 expandtab shiftwidth=4 smarttab
+:syntax on
+:nnoremap <{{TABNEXT}}> :tabnext<CR>
+:nnoremap <{{TABPREV}}> :tabprevious<CR>
+:tab all
