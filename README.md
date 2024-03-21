@@ -1,8 +1,8 @@
 # diwu: Docker Image With Users
-A handy wrapper script for building standalone docker images, primarily interactive ones.
+A handy wrapper script for building standalone docker images, primarily interactive ones. Originally developed to run dockerized command line applications on a Linux system with no package manager to speak of.
 
 ## Main Features
-1. Helps replicate host OS users in the guest OS with the same UIDs.
+1. Helps replicate host OS users in the guest OS preserving the UIDs.
 2. Creates timestamped docker images so that you can quickly switch to a previous build …
 3. … and then helps manage stale images.
 4. Processes generic templates into guest-side scripts and/or config files.
@@ -14,22 +14,25 @@ sudo cp -iv diwu.sh /usr/local/bin/
 ```
 
 ## Prerequisites And Limitations
-Only Linux hosts and guests are currently supported. Running on macOS hosts is probably feasible, but not yet tested.
-
-Diwu relies on GNU basic utils:
-   * bash v.4+ (macOS's v.3 would probably do but testing is needed)
+1. Only Linux hosts and guests are currently supported
+   * running on macOS hosts is probably feasible, but not yet tested.
+2. Diwu relies on GNU basic utils:
+   * bash v.4+ 
+     * macOS's v.3 would probably do but testing is needed
    * coreutils
    * find
    * sed
+3. You should be allowed to run docker on your system. This typically boils down to:
+   * your account should be a member of the `docker` group
+   * `/var/run/docker.sock` should be assigned to this very group
+
+This is a rather low bar to clear but I still included a crude little script to check:
+```bash
+$ ./prereq.sh 
+Looking good
+```
 
 ## Basic operation
-First off I assume that you are allowed to run docker on your system, i.e. your account is a member of the `docker` group and `/var/run/docker.sock` is assigned to this very group:
-```bash
-$ id -Gn
-users docker
-$ ls -l /var/run/docker.sock 
-srw-rw---- 1 root docker 0 Mar  9 07:16 /var/run/docker.sock
-```
 Let's say you want to run `vim` in a container. You create a dir for your new project, and inside it, you create a docker file:
 
 ```bash
@@ -224,7 +227,7 @@ removed directory '.diwu_vimd_2024_03_15_12_53_27_62ZqCO'
 All the files used in this walkthrough can be found in the `vimd` dir in this repo.
 
 ## Implied Dir Structure
-The `voorbeeld` (Dutch for “example”) dir of this repo exhibits the structure that is recommended for the diwu projects.
+The `voorbeeld` (Dutch for “example”) dir of this repo exhibits the structure that is recommended for a diwu project.
 
 ```
 $ tree voorbeeld
@@ -244,13 +247,13 @@ voorbeeld
 
 ```
 ### Project Root
-The name of the project root dir sets the name for the project. Docker image name, a bunch of project files' names, container name and hostname all derive from it. It is possible to override this name via `-i` option, but generally, it makes sense to go with the project name as the root dir name.
+The name of the project root dir sets the name of the project. Docker image name, a bunch of project files' names, container name and hostname all derive from it. It is possible to override this name via `-i` option, but generally, it makes sense to go with the project name as the root dir name.
 ### Docker File
 The recommended naming scheme for the docker file is `<project name>.dockerfile`. As it was shown above the traditional `Dockerfile` also works, but such an “impersonal” name can lead to unnecessary confusion. The `-f` option will help if you need to go with some other name for the docker file. 
 ### Scripts Dir
 All project scripts and script templates (see below) are supposed to reside in the `scripts` dir. There are 3 distinct kinds of scripts recognized by diwu.
 #### Host Scripts
-Host-side scripts in `scripts/host`; the `voorbeeld` project has only one entry here: a script for running the project's container, see more on it further.
+Host-side scripts in `scripts/host`; the `voorbeeld` project has only one file here: a script for running the project's container, see more on it further.
 #### Guest Scripts
 Client-side scripts and templates in `scripts/guest` are meant to be copied to the container by the docker file; the `entrypoint.sh` included with this project only serves to demonstrate diwu's operation: generally speaking, a shell script makes a lousy container entry point.
 #### Addusers Template
@@ -258,7 +261,7 @@ Addusers script template is to be named `addusers.template.sh` and put in the `s
 ### Config Dir
 Any config files and templates thereof to be copied into the image go to the `config` dir. It is sometimes tricky to distinguish files belonging here from the ones that should go to the `scripts/guest` dir, but no matter: diwu treats those two dirs without prejudice.
 ### Default Vars File
-Unless instructed otherwise, diwu looks for templates vars file named `<project name.vars.ini>` in the project root dir. More on templates and vars file(s) further on.
+Unless instructed otherwise, diwu looks for templates vars file named `<project name>.vars.ini` in the project root dir. More on templates and vars file(s) further on.
 ## Addusers operation
 Diwu includes a mechanism for replicating in the guest OS the host-side users from a specific group. By default, it replicates members of `docker` or `administrators` group, otherwise the source host-side group can be set via the `-g` option.
 
@@ -294,133 +297,118 @@ ARG ADDUSERS
 COPY $ADDUSERS /tmp/addusers.sh
 RUN /bin/sh /tmp/addusers.sh
 ```
+## Processing templates
+Diwu can process templates into guest-side scripts and config files. Templates are files in `config` and `scripts/guest` dirs named like `<name>.template.<ext>`.
 
+To enable template processing diwu needs a vars file. By default, a file named `<project name>.vars.ini` is looked for in the project root dir. In practice more often than not a vars file is supplied via the `-e` option. If no vars file is found diwu produces a *“No variables file found …”* warning and does not process any templates.
 
+If you do not need template processing just use the `-E` option. It also removes the warning.
 
+Vars files consist of `<var> = <value>` lines. Variable names must follow the usual variable naming convention. Values can not span lines. Any line that does not conform to this format is ignored.
+```ini
+# Switch to previous tab
+TABPREV = F1
 
-
----------------------
-
-
-* The `scripts/adduser.template.sh` is used to generate the guest-side script that is run from the dockerfile and performs the same operations for every replicated user. This particular script just adds users to the guest OS.
-* The `scripts/host` is for the host-side scripts. It is imho a good practice to name the script that runs the container after the image. The one that comes with this repo is thus named `voorbeeld.sh`. It actually is  very generic: it can be copied and renamed for other projects and used as-is, or as a starting point for something more project-specific.
-* The `scripts/guest` dir contains scripts and script templates used on the guest side. All files named like `<name>.template.<ext>` are considered templates. More on this below.
-* The `config` dir is supposed to contain config files and templates of config files. All files named like `<name>.template.<ext>` are considered templates. More on this below.
-* The vars file `voorbeeld.vars.ini` is used for filling in all the templates in `config` and `scripts/guest` dirs. More on templates below.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-### Building image
-Just run the script in the project dir, it should pick up all the settings.
-```bash
-cd voorbeeld
-../diwu.sh
+# Switch to next tab
+TABNEXT = F2
 ```
 
-### Debugging images
-Actually before building an image, it generally makes sense to run a simulation by passing the `-s` option. All the filled in templates and all docker calls get printed out:
-```bash
-diwu.sh -s
->============================ addusers.sh =============================<
-adduser -g admin -s /bin/sh -D -u 1024 admin 100
-
-adduser -g ish -s /bin/sh -D -u 1028 ish 100
-
-adduser -g supervisor -s /bin/sh -D -u 1026 supervisor 100
->======================================================================<
->=============================== vim.rc ===============================<
+Template file should have the variables in “double-mustaches”. Any unset variables are left as is. Here is for example a template for `.vimrc`:
+```vim
 :set pastetoggle=<f5>
 :set tabstop=4 softtabstop=0 expandtab shiftwidth=4 smarttab
 :syntax on
-:nnoremap <F2> :tabnext<CR>
-:nnoremap <F1> :tabprevious<CR>
+:nnoremap <{{TABNEXT}}> :tabnext<CR>
+:nnoremap <{{TABPREV}}> :tabprevious<CR>
 :tab all
->======================================================================<
-docker build -f voorbeeld.dockerfile -t voorbeeld:2024.03.03.14.13.33 --build-arg ADDUSERS=.diwu_2024.03.03.14.13.33_Uh4Tp9/addusers.sh --build-arg DIWU_DIR=.diwu_2024.03.03.14.13.33_Uh4Tp9 .
-removed '.diwu_2024.03.03.14.13.33_Uh4Tp9/vim.rc'
-removed '.diwu_2024.03.03.14.13.33_Uh4Tp9/addusers.sh'
-removed directory '.diwu_2024.03.03.14.13.33_Uh4Tp9'
-docker tag voorbeeld:2024.03.03.14.13.33 voorbeeld:latest
 ```
-NB: shell commands are printed without quotes, don't panic :-)
 
-### Running container
-Just run the `scripts/host/voorbeeld.sh` to create and run the container. If you are inside a `screen` session you might want to add the `-w` option to run container in a new screen window. This goes mostly for the interactive images, like this one, with a `vim`.
-
-To daemonize the container use `-d` option of the running script. Stopping it can be done with `-k`. A useful combination of options is `-dwl` that runs container daemonized and immediately launches the log viewer in a new screen window.
-
-### Timestamps and cleaning up
-Every time you run the script it creates an image tagged `<image name>:<year>.<month>.<day>.<hour>.<minute>.<second>`. This is handy if you need to run a previous build. The latest build is also tagged `<image name>:latest` so you don't need to follow this temporal tags. Another tag, instead of `latest` can be assigned by using the `-t` option.
-
-Once you don't need the old builds, they can be listed by running `diwu.sh -L`. Or you can remove them all in one go:
+Each processed template is written to a file in the temp dir that has the same name but without the `template` “infix”. So `vim.template.rc` becomes `vim.rc`. The path to the temp dir is passed to the docker file as the `DIWU_DIR` argument. Then the docker file should take care of copying it to the right path on the guest.
+```Dockerfile
+ARG DIWU_DIR
+COPY $DIWU_DIR/vim.rc /etc/vim/vimrc.local
+```
+### Templates And Tags
+Sometimes it makes sense to have image tags named after custom vars files. This helps manage several configurations of the same image. Let's say your image needs to connect to one of several servers. If you create a vars file for each server then all the images can be built in one go.
 ```bash
-docker image rm $(diwu.sh -L)
+$ ls -1 *.vars.ini
+local.vars.ini
+remote.vars.ini
+
+$ for V in *.vars.ini; do diwu.sh -e "$V" -t "${V%.vars.ini}"; done
+
+$ docker image ls pjkt
+REPOSITORY   TAG                   IMAGE ID       CREATED            SIZE
+pjkt         2024.03.18.18.40.11   e5a4ff5619f0   5 minutes ago      176MB
+pjkt         local                 e5a4ff5619f0   5 minutes ago      176MB
+pjkt         2024.03.18.18.42.49   f26012ae47b1   2 minutes ago      176MB
+pjkt         remote                f26012ae47b1   2 minutes ago      176MB
+``` 
+## Timestamps And Management
+### Image Tagging
+Every time diwu builds an image it is assigned a timestamp tag like `2024.12.31.23.59.59`. Also, the newly built image is by default assigned the `latest` tag. Thus the newest version of the image is always the default one in docker terms. The `-t` option allows assigning the image an arbitrary tag and `-T` instructs diwu to leave the image with only a timestamp tag.
+### Old Images
+This manner of image tagging often leaves you with a lot of old stale timestemp-tagged images. Diwu helps manage them with the `-L` option which prints out all the images that have only timestamp tags, i.e. are not known to be of any particular use. Feeding its output to `docker` allows removing all stale images with one command.
+```bash
+$ diwu.sh -L
+voorbeeld:2024.03.05.09.57.16
+voorbeeld:2024.03.03.13.51.18
+voorbeeld:2024.03.02.12.46.16
+
+$ docker image rm $(diwu.sh -L)
+Untagged: voorbeeld:2024.03.05.09.57.16
+Deleted: # yada yada yada
+Untagged: voorbeeld:2024.03.03.13.51.18
+Deleted: # yada yada yada
+Untagged: voorbeeld:2024.03.02.12.46.16
+Deleted: # yada yada yada
 ```
+### Temp Dirs
+Every time diwu attempts to build an image it creates a temp dir named `.diwu_<project name>_<timestamp>_<random>` in the project root dir. If building fails this temp dir is left behind so they need to be manually deleted.
+```bash
+$ ls -1d .diwu_*
+.diwu_voorbeeld_2024_03_04_15_04_04_MjzV53
+.diwu_voorbeeld_2024_03_06_12_04_34_zIYILq
 
-NB: Images that have **only** temporal tags get listed by `-L` and thus deleted by the command above.
+$ rm -rf .diwu_*
+```
+## Running Images
+The images built with diwu are just like any other docker images so they can be run by `docker run` or any wrapper thereof. But since it is mostly targeted at building containerized command line apps it often makes sense to write a project-specific launcher script. The `voorbeeld` project included with this repo comes with a portable and rather generic launcher that can be found in `scripts/host/voorbeeld.sh`. It has some options helpful both for regular use and for debugging images:
+* running in a new `screen` window
+* daemonizing and optionally following the log
+* running a shell as root or as the current user
+* mounting files copied to the image by the docker file 
+  * this option currently doesn't work with templates and requires the individual `COPY` directives in the docker file with concrete targets
+```bash
+$ ./voorbeeld/scripts/host/voorbeeld.sh -h
+Usage:
+  voorbeeld.sh [-h] [-s] [-S | -R] [-t <tag>] [-w] [-m] [-d | -D [-l]]
+               [-e | -E | -k]
 
-### All available options
-* **-h** Print help and exit
-* **-s** Simulate, just print out scripts and commands
-* **-i** Image name, current dir name used if omitted
-* **-f** Docker file, if omitted looks for `<image name>.dockerfile`, `Dockerfile`
-* **-g** Name of the selected host-side users group, if omitted tries using `docker`, `administrators`
-* **-G** Id of the guest-side primary users group, if omitted uses 100
-* **-a** Adduser script template, if omitted looks for `addusers.template.sh` in `scripts/users/`, `scripts/`, `./`
-* **-A** Do not generate adduser script
-* **-t** Tag image something else instead of `latest`
-* **-T** Build time-tagged image only, do NOT tag it as `latest`
-* **-e** File defining variables for extra templates, if omitted looks for `<image name>.vars.ini`
-* **-L** List images with timed tag only and exit
+Run voorbeeld.
 
-## Adding users
-In some use cases it helps to have in the guest OS inside the container some of the same users and groups that you have in the host OS. I find it is specifically handy with interactive containers when it is hard to plan ahead the access rights to the files and folders.
-
-The `diwu.sh` script resolves this by going through a specific user group on the host and filling in the names, UID's and GID's of all the users in this group into `addusers.template.sh` thus generating an `addusers.sh` script that is run from the dockerfile while building an image.
-
-Before building the image `diwu.sh` creates a temporary directory named `.diwu_<timestamp>_<randomness>` in the project directory. Inside it the `addusers.sh` is created. Then path to it is passed to `docker build` as an argument named `ADDUSERS`. And then dockerfile can execute this script while building the image.
-
-Please see the sources of `addusers.template.sh` and `voorbeeld.dockerfile` for details.
-
-By default, the script takes the list of users from the `docker` group on the host, or from `administrators` group. If neither group is found on the host, then no users are added. Otherwise, a source group name can be passed to the script via the `-g` option.
-
-The same GID `100` is passed to `addusers.template.sh` for all users. Another GID can be specified with the `-G` option. If you want to create a GID for every user in the guest OS, or just leave the GID selection to the OS itself this can be achieved by modifying the `addusers.template.sh`.
-
-## Processing templates
-If some settings in the image need to be easily adjusted, or if several versions of an image with different setting should exist at the same time, then it makes sense to create a custom config, or a bunch of configs, for the image and then fill the values during the build.
-
-This script uses vars for this purpose. By default the script looks for the file named `<image name>.vars.ini` in the project root, but it's often more handy to keep elsewhere and pass the path to it via the `-e` option. If no vars file is found, then templates processing doesn't happen.
-
-Actually, the vars file is a proper `bash` script that gets sourced by the `diwu.sh` script. This means that caution must be excersized in terms of the access rights to the vars files.
-
-Templates are all files fitting the `<name>.template.<ext>` naming convention found in `config` and `scripts/guest` dirs. Variable names in templates follow (to an extent) the shell convention: `$VARIABLE_NAME`. Curly brackets are not currently supported. Variables with overlapping names like `$VAR` and `$VAR1` might get confused in substitution. Also, variable names that conflict with host OS environment will be ignored. 
-
-NB: Template variable naming situation will probably be changed / improved further on.
-
-Each template is processed into a file of the same name just without the `template` infix and put into the temp dir mentioned above. If at least one file was generated, then the path to the temp dir is passed to `docker build` via the `DIWU_DIR` argument. Please see the `config/vim.template.rc` and `voorbeeld.dockerfile` for details.
+Options:
+  -h Print help and exit
+  -s Simmulate, just print out commands
+  -S Run shell
+  -R Run shell with root inside
+  -t Another tag instaed of 'latest'
+  -w Open new screen window
+  -m Mount copied files for debugging
+  -d Daemonize
+  -l Follow container log
+  -e Run docker exec
+  -E Run docker exec with root inside
+  -k Kill container
+```
+Feel free to use this script as a starting point for your project-specific launchers.
+## TODO
+* Add docker file templates for automating the copying of files generated from templates.
+  * Guess shell from shebang
+  * Put files in `/opt/diwu`
+* Add “skeleton” project generation
+* Add `addgroup.template.sh`
+* Add some form of automation for vars files to image tags coordination 
+* Remove temp dir after a failed build
+* Improve debug-mounting in launcher
+* Adapt to run on macOS host

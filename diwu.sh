@@ -1,8 +1,5 @@
 #!/bin/bash 
 
-# TODO: Add project dir generation
-# TODO: Add addgroup.template.sh
-
 set -e
 
 # Global constants
