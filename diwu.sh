@@ -37,7 +37,7 @@ cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
     [-G <users group id> ] [-a <addusers template> | -A] [-t <tag> | -T]
-    [-e <vars file> | -E] [-L] [-- <extra docker build options>]
+    [-e <vars file> | -E] [-L] [-K] [-- <extra docker build options>]
 
 Builds specified docker image, creating users from given group.
 
@@ -62,6 +62,7 @@ Options:
      '<image name>.$C_VARS_FILE_SUFFIX'
   -E Do not process templates
   -L List images with timed tag only and exit
+  -K Do NOT use BuildKit
 
 EOU
 }
@@ -408,6 +409,10 @@ function dump_generated {
 }
 
 function cook_image {
+    if [ -z "$G_NO_BUILDKIT" ]; then
+        export DOCKER_BUILDKIT=1 \
+            BUILDKIT_PROGRESS=plain
+    fi
     $G_SIMMULATE docker build \
         -f "$G_DOCKERFILE" \
         -t "$G_TIME_TAGGED" \
@@ -424,7 +429,7 @@ function assign_extra_tag {
 
 # Read command line options
 
-while getopts ":i:f:g:G:a:t:e:ThEsAL" OPT; do
+while getopts ":i:f:g:G:a:t:e:ThEsALK" OPT; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -465,6 +470,9 @@ while getopts ":i:f:g:G:a:t:e:ThEsAL" OPT; do
             ;;
         L) # List anonymous timed tags
             G_LIST_ANONYMS_AND_EXIT=1
+            ;;
+        K) # Don't use BuildKit
+            G_NO_BUILDKIT=1
             ;;
     esac
 done
