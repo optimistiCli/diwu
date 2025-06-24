@@ -36,7 +36,7 @@ usage () {
 cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
-    [-G <users group id> ] [-a <addusers template> | -A] [-t <tag> | -T]
+    [-G <users group id> ] [-a <addusers template> | -A] [-t <tag> | -T | -b]
     [-e <vars file> | -E] [-L] [-K] [-- <extra docker build options>]
 
 Builds specified docker image, creating users from given group.
@@ -58,6 +58,7 @@ Options:
   -A Do not generate addusers script
   -t Tag image something else instead of 'latest'
   -T Build time-tagged image only, do NOT tag it as 'latest'
+  -b Use current git branch name for tag
   -e File defining variables for extra templates, if omitted looks for:
      '<image name>.$C_VARS_FILE_SUFFIX'
   -E Do not process templates
@@ -245,6 +246,12 @@ function setup_dockerfile {
 }
 
 function setup_extra_tag {
+    if [ -n $G_GIT_TAG ]; then
+        G_EXTRA_TAG="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+        if [ -z "$G_EXTRA_TAG" ]; then
+            brag_and_exit "Failed to get tag from git branch"
+        fi
+    fi
     if [ -n "$G_EXTRA_TAG" ]; then
         if ! egrep -q '^[a-zA-Z0-9_][a-zA-Z0-9_\.\-]{,127}$' <<<"$G_EXTRA_TAG"; then
             brag_and_exit "Strange tag: '$G_EXTRA_TAG'"
@@ -429,7 +436,7 @@ function assign_extra_tag {
 
 # Read command line options
 
-while getopts ":i:f:g:G:a:t:e:ThEsALK" OPT; do
+while getopts ":i:f:g:G:a:t:e:TbhEsALK" OPT; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -458,6 +465,9 @@ while getopts ":i:f:g:G:a:t:e:ThEsALK" OPT; do
             ;;
         t) # Tag test
             G_EXTRA_TAG="$OPTARG"
+            ;;
+        b) # Tag test
+            G_GIT_TAG=1
             ;;
         e) # Vars file
             G_VARS_FILE="$OPTARG"
