@@ -246,7 +246,7 @@ function setup_dockerfile {
 }
 
 function setup_extra_tag {
-    if [ -n $G_GIT_TAG ]; then
+    if [ -n "$G_GIT_TAG" ]; then
         G_EXTRA_TAG="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
         if [ -z "$G_EXTRA_TAG" ]; then
             brag_and_exit "Failed to get tag from git branch"
