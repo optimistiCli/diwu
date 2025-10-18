@@ -37,7 +37,7 @@ cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
     [-G <users group id> ] [-a <addusers template> | -A] [-t <tag> | -T | -b]
-    [-e <vars file> | -E] [-L] [-K] [-- <extra docker build options>]
+    [-e <vars file> | -E] [-L] [-k|-K] [-- <extra docker build options>]
 
 Builds specified docker image, creating users from given group.
 
@@ -63,6 +63,7 @@ Options:
      '<image name>.$C_VARS_FILE_SUFFIX'
   -E Do not process templates
   -L List images with timed tag only and exit
+  -k Privileged build via BuildKit
   -K Do NOT use BuildKit
 
 EOU
@@ -420,7 +421,21 @@ function cook_image {
         export DOCKER_BUILDKIT=1 \
             BUILDKIT_PROGRESS=plain
     fi
-    $G_SIMMULATE docker build \
+    if [ -n "$G_PRIVILEGED_BUILD" ]; then
+        local BUILDER='privileged-builder'
+        if ! docker buildx inspect "$BUILDER" 2>/dev/null; then
+            $G_SIMMULATE docker buildx create \
+                --bootstrap \
+                --name "$BUILDER" \
+                --buildkitd-flags " \
+                    --allow-insecure-entitlement security.insecure \
+                    --allow-insecure-entitlement network.host \
+                " \
+                --driver docker-container
+        fi
+        local BUILD_CMD="buildx build --load  --builder $BUILDER --allow security.insecure"
+    fi
+    $G_SIMMULATE docker ${BUILD_CMD:-build} \
         -f "$G_DOCKERFILE" \
         -t "$G_TIME_TAGGED" \
         $G_ADDUSERS_OPT $G_DIWU_DIR_OPT "$@" .
@@ -436,7 +451,7 @@ function assign_extra_tag {
 
 # Read command line options
 
-while getopts ":i:f:g:G:a:t:e:TbhEsALK" OPT; do
+while getopts ":i:f:g:G:a:t:e:TbhEsALkK" OPT; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -463,10 +478,10 @@ while getopts ":i:f:g:G:a:t:e:TbhEsALK" OPT; do
         T) # Don't tag as lates
             G_NO_EXTRA_TAG=1
             ;;
-        t) # Tag test
+        t) # Custom tag
             G_EXTRA_TAG="$OPTARG"
             ;;
-        b) # Tag test
+        b) # Tag as git branch
             G_GIT_TAG=1
             ;;
         e) # Vars file
@@ -481,6 +496,9 @@ while getopts ":i:f:g:G:a:t:e:TbhEsALK" OPT; do
         L) # List anonymous timed tags
             G_LIST_ANONYMS_AND_EXIT=1
             ;;
+        k) # Use BuildKit for privileged build
+            G_PRIVILEGED_BUILD=1
+            ;;
         K) # Don't use BuildKit
             G_NO_BUILDKIT=1
             ;;
@@ -491,6 +509,9 @@ shift $(( $OPTIND - 1 ))
 
 # Check for sanity and set everithing up
 
+if [ -n "$G_PRIVILEGED_BUILD" ]; then
+    unset G_NO_BUILDKIT
+fi
 setup_img_name
 if [ -n "$G_LIST_ANONYMS_AND_EXIT" ]; then
     list_anonyms
