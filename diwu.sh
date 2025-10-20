@@ -38,6 +38,7 @@ Usage:
   $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
     [-G <users group id> ] [-a <addusers template> | -A] [-t <tag> | -T | -b]
     [-e <vars file> | -E] [-L] [-k|-K] [-- <extra docker build options>]
+    [-m <arg. name>=<file path>]
 
 Builds specified docker image, creating users from given group.
 
@@ -65,6 +66,7 @@ Options:
   -L List images with timed tag only and exit
   -k Privileged build via BuildKit
   -K Do NOT use BuildKit
+  -m Make file or dir available during build as arg. name
 
 EOU
 }
@@ -438,7 +440,7 @@ function cook_image {
     $G_SIMMULATE docker ${BUILD_CMD:-build} \
         -f "$G_DOCKERFILE" \
         -t "$G_TIME_TAGGED" \
-        $G_ADDUSERS_OPT $G_DIWU_DIR_OPT "$@" .
+        $G_ADDUSERS_OPT $G_DIWU_DIR_OPT $G_MAKE_AVAIL_OPT "$@" .
 }
 
 function clean_up {
@@ -449,9 +451,35 @@ function assign_extra_tag {
     $G_SIMMULATE docker tag "$G_TIME_TAGGED" "${G_IMG_NAME}:${G_EXTRA_TAG}"
 }
 
+function check_make_available {
+    if ! echo -n "$1" | egrep -q '^[a-zA-Z][a-zA-Z0-9_]+=.'; then
+        brag_and_exit "Strange arg. name: '$1'"
+    fi
+    local SRC="$(echo -n "$1" | sed -E 's/^[^=]+=//')"
+    if ! [ -e "$SRC" -a -r "$SRC" ]; then
+        brag_and_exit "Strange path: '$1'"
+    fi
+}
+
+function link_make_available {
+    local MA_DIR="${G_TEMP_DIR}/made_available"
+    mkdir -p "$MA_DIR"
+    while IFS='' read -r -d $'\n' MAPPING; do
+        local MA_NAME="$(echo -n "$MAPPING" | sed -E 's/=.*//')"
+        local MA_DEST="${MA_DIR}/${MA_NAME}.copy"
+        if [ -e "$MA_DEST" ]; then
+            brag_and_exit "Impossible arg. name: '$MA_NAME'"
+        fi
+        local MA_PATH="$(echo -n "$MAPPING" | sed -E 's/^[^=]+=//')"
+        cp -al "$MA_PATH" "$MA_DEST" 2>/dev/null \
+            || cp -a -T "$MA_PATH" "$MA_DEST"
+        G_MAKE_AVAIL_OPT="${G_MAKE_AVAIL_OPT:+$G_MAKE_AVAIL_OPT }--build-arg ${MA_NAME}=${MA_DEST}"
+    done <<<"$(echo -n "$G_MAKE_AVAIL" | tr ':' $'\n')"
+}
+
 # Read command line options
 
-while getopts ":i:f:g:G:a:t:e:TbhEsALkK" OPT; do
+while getopts ":i:f:g:G:a:t:e:m:TbhEsALkK" OPT; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -502,6 +530,10 @@ while getopts ":i:f:g:G:a:t:e:TbhEsALkK" OPT; do
         K) # Don't use BuildKit
             G_NO_BUILDKIT=1
             ;;
+        m) # Make file available
+            check_make_available "$OPTARG"
+            G_MAKE_AVAIL="${G_MAKE_AVAIL:+$G_MAKE_AVAIL:}${OPTARG}"
+            ;;
     esac
 done
 
@@ -532,6 +564,9 @@ fi
 cook_timed_tag
 cook_temp_dir
 cook_addusers_script_name
+if [ -n "$G_MAKE_AVAIL" ]; then
+    link_make_available
+fi
 if [ -z "$G_NO_ADDUSERS" ]; then
     cook_addusers_script
 fi
