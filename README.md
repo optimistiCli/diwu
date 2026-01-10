@@ -261,7 +261,7 @@ Addusers script template is to be named `addusers.template.sh` and put in the `s
 ### Config Dir
 Any config files and templates thereof to be copied into the image go to the `config` dir. It is sometimes tricky to distinguish files belonging here from the ones that should go to the `scripts/guest` dir, but no matter: diwu treats those two dirs without prejudice.
 ### Default Vars File
-Unless instructed otherwise, diwu looks for templates vars file named `<project name>.vars.ini` in the project root dir. More on templates and vars file(s) further on.
+Unless instructed otherwise, diwu looks for templates vars file named either `<project name>-<tag>.vars.ini` or `<project name>.vars.ini` in the project root dir, then in `~/.diwu/` and then in `/etc/diwu/`. More on templates and vars file(s) further on.
 ## Addusers operation
 Diwu includes a mechanism for replicating in the guest OS the host-side users from a specific group. By default, it replicates members of `docker` or `administrators` group, otherwise the source host-side group can be set via the `-g` option.
 
@@ -300,7 +300,7 @@ RUN /bin/sh /tmp/addusers.sh
 ## Processing templates
 Diwu can process templates into guest-side scripts and config files. Templates are files in `config` and `scripts/guest` dirs named like `<name>.template.<ext>`.
 
-To enable template processing diwu needs a vars file. By default, a file named `<project name>.vars.ini` is looked for in the project root dir. In practice more often than not a vars file is supplied via the `-e` option. If no vars file is found diwu produces a *“No variables file found …”* warning and does not process any templates.
+To enable template processing diwu needs a vars file. By default, a file named <project name>-<tag>.vars.ini` or `<project name>.vars.ini` is looked for in the project root dir, then in `~/.diwu/` and then in `/etc/diwu/`. Otherwise a vars file can be supplied via the `-e` option. If no vars file is found diwu produces a *“No variables file found …”* warning and does not process any templates.
 
 If you do not need template processing just use the `-E` option. It also removes the warning.
 
@@ -332,16 +332,16 @@ COPY $DIWU_DIR/vim.rc /etc/vim/vimrc.local
 Sometimes it makes sense to have image tags named after custom vars files. This helps manage several configurations of the same image. Let's say your image needs to connect to one of several servers. If you create a vars file for each server then all the images can be built in one go.
 ```bash
 $ ls -1 *.vars.ini
-local.vars.ini
-remote.vars.ini
+pjkt-local.vars.ini
+pjkt-remote.vars.ini
 
-$ for V in *.vars.ini; do diwu.sh -e "$V" -t "${V%.vars.ini}"; done
+$ for T in local remote; do diwu.sh -t "$T"; done
 
 $ docker image ls pjkt
 REPOSITORY   TAG                   IMAGE ID       CREATED            SIZE
-pjkt         2024.03.18.18.40.11   e5a4ff5619f0   5 minutes ago      176MB
+pjkt         2026.01.10.18.40.11   e5a4ff5619f0   5 minutes ago      176MB
 pjkt         local                 e5a4ff5619f0   5 minutes ago      176MB
-pjkt         2024.03.18.18.42.49   f26012ae47b1   2 minutes ago      176MB
+pjkt         2026.01.10.18.42.49   f26012ae47b1   2 minutes ago      176MB
 pjkt         remote                f26012ae47b1   2 minutes ago      176MB
 ``` 
 ## Timestamps And Management
@@ -408,7 +408,8 @@ Feel free to use this script as a starting point for your project-specific launc
   * Put files in `/opt/diwu`
 * Add “skeleton” project generation
 * Add `addgroup.template.sh`
-* Add some form of automation for vars files to image tags coordination 
 * Remove temp dir after a failed build
 * Improve debug-mounting in launcher
 * Adapt to run on macOS host
+* Describe priveleged building to readme
+* Describe foreign files copying to readme
