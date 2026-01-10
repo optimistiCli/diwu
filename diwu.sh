@@ -27,6 +27,11 @@ C_ADDUSERS_VARS='
     USER_GROUP_ID
 '
 C_VARS_FILE_SUFFIX='vars.ini'
+C_VARS_FILE_DIRS="
+    ./
+    $HOME/.diwu/
+    /etc/diwu/
+"
 # Shuld be an even number
 C_MAX_SPLITTER=72
 
@@ -37,7 +42,8 @@ cat <<EOU >&2
 Usage:
   $(basename "$0") [-h] [-s] [-i <image name>] [-g <group name>]
     [-G <users group id> ] [-a <addusers template> | -A] [-t <tag> | -T | -b]
-    [-e <vars file> | -E] [-L] [-K] [-- <extra docker build options>]
+    [-e <vars file> | -E] [-L] [-k|-K] [-- <extra docker build options>]
+    [-m <arg. name>=<file path>]
 
 Builds specified docker image, creating users from given group.
 
@@ -60,10 +66,13 @@ Options:
   -T Build time-tagged image only, do NOT tag it as 'latest'
   -b Use current git branch name for tag
   -e File defining variables for extra templates, if omitted looks for:
-     '<image name>.$C_VARS_FILE_SUFFIX'
+     '<image name>-<tag>.$C_VARS_FILE_SUFFIX' or '<image name>.$C_VARS_FILE_SUFFIX'
+     in $(present_list "$C_VARS_FILE_DIRS")
   -E Do not process templates
   -L List images with timed tag only and exit
+  -k Privileged build via BuildKit
   -K Do NOT use BuildKit
+  -m Make file or dir available during build as arg. name
 
 EOU
 }
@@ -261,13 +270,24 @@ function setup_extra_tag {
     fi
 }
 
+# Depends on setup_extra_tag
 function setup_vars_file {
     if [ -n "$G_VARS_FILE" ]; then
         if ! [ -e "$G_VARS_FILE" ]; then
             brag_and_exit "Strange variables file: '$G_VARS_FILE'"
         fi
     else
-        G_VARS_FILE="${G_IMG_NAME}.$C_VARS_FILE_SUFFIX"
+        for DIR in $C_VARS_FILE_DIRS; do
+            WITH_TAG="${DIR}/${G_IMG_NAME}-${G_EXTRA_TAG}.$C_VARS_FILE_SUFFIX"
+            SANS_TAG="${DIR}/${G_IMG_NAME}.$C_VARS_FILE_SUFFIX"
+            if [ -e "$WITH_TAG" ]; then
+                G_VARS_FILE="$WITH_TAG"
+                break
+            elif [ -e "$SANS_TAG" ]; then
+                G_VARS_FILE="$SANS_TAG"
+                break
+            fi
+        done
         if ! [ -e "$G_VARS_FILE" ]; then
             moan_and_keep_going "No variables file found, extra templates will not be processed"
             G_NO_TEMPLATES=1
@@ -420,10 +440,24 @@ function cook_image {
         export DOCKER_BUILDKIT=1 \
             BUILDKIT_PROGRESS=plain
     fi
-    $G_SIMMULATE docker build \
+    if [ -n "$G_PRIVILEGED_BUILD" ]; then
+        local BUILDER='privileged-builder'
+        if ! docker buildx inspect "$BUILDER" 2>/dev/null; then
+            $G_SIMMULATE docker buildx create \
+                --bootstrap \
+                --name "$BUILDER" \
+                --buildkitd-flags " \
+                    --allow-insecure-entitlement security.insecure \
+                    --allow-insecure-entitlement network.host \
+                " \
+                --driver docker-container
+        fi
+        local BUILD_CMD="buildx build --load  --builder $BUILDER --allow security.insecure"
+    fi
+    $G_SIMMULATE docker ${BUILD_CMD:-build} \
         -f "$G_DOCKERFILE" \
         -t "$G_TIME_TAGGED" \
-        $G_ADDUSERS_OPT $G_DIWU_DIR_OPT "$@" .
+        $G_ADDUSERS_OPT $G_DIWU_DIR_OPT $G_MAKE_AVAIL_OPT "$@" .
 }
 
 function clean_up {
@@ -434,9 +468,35 @@ function assign_extra_tag {
     $G_SIMMULATE docker tag "$G_TIME_TAGGED" "${G_IMG_NAME}:${G_EXTRA_TAG}"
 }
 
+function check_make_available {
+    if ! echo -n "$1" | egrep -q '^[a-zA-Z][a-zA-Z0-9_]+=.'; then
+        brag_and_exit "Strange arg. name: '$1'"
+    fi
+    local SRC="$(echo -n "$1" | sed -E 's/^[^=]+=//')"
+    if ! [ -e "$SRC" -a -r "$SRC" ]; then
+        brag_and_exit "Strange path: '$1'"
+    fi
+}
+
+function link_make_available {
+    local MA_DIR="${G_TEMP_DIR}/made_available"
+    mkdir -p "$MA_DIR"
+    while IFS='' read -r -d $'\n' MAPPING; do
+        local MA_NAME="$(echo -n "$MAPPING" | sed -E 's/=.*//')"
+        local MA_DEST="${MA_DIR}/${MA_NAME}.copy"
+        if [ -e "$MA_DEST" ]; then
+            brag_and_exit "Impossible arg. name: '$MA_NAME'"
+        fi
+        local MA_PATH="$(echo -n "$MAPPING" | sed -E 's/^[^=]+=//')"
+        cp -al "$MA_PATH" "$MA_DEST" 2>/dev/null \
+            || cp -a -T "$MA_PATH" "$MA_DEST"
+        G_MAKE_AVAIL_OPT="${G_MAKE_AVAIL_OPT:+$G_MAKE_AVAIL_OPT }--build-arg ${MA_NAME}=${MA_DEST}"
+    done <<<"$(echo -n "$G_MAKE_AVAIL" | tr ':' $'\n')"
+}
+
 # Read command line options
 
-while getopts ":i:f:g:G:a:t:e:TbhEsALK" OPT; do
+while getopts ":i:f:g:G:a:t:e:m:TbhEsALkK" OPT; do
     case $OPT in
         h) # Print help and exit
             usage
@@ -463,10 +523,10 @@ while getopts ":i:f:g:G:a:t:e:TbhEsALK" OPT; do
         T) # Don't tag as lates
             G_NO_EXTRA_TAG=1
             ;;
-        t) # Tag test
+        t) # Custom tag
             G_EXTRA_TAG="$OPTARG"
             ;;
-        b) # Tag test
+        b) # Tag as git branch
             G_GIT_TAG=1
             ;;
         e) # Vars file
@@ -481,8 +541,15 @@ while getopts ":i:f:g:G:a:t:e:TbhEsALK" OPT; do
         L) # List anonymous timed tags
             G_LIST_ANONYMS_AND_EXIT=1
             ;;
+        k) # Use BuildKit for privileged build
+            G_PRIVILEGED_BUILD=1
+            ;;
         K) # Don't use BuildKit
             G_NO_BUILDKIT=1
+            ;;
+        m) # Make file available
+            check_make_available "$OPTARG"
+            G_MAKE_AVAIL="${G_MAKE_AVAIL:+$G_MAKE_AVAIL:}${OPTARG}"
             ;;
     esac
 done
@@ -491,6 +558,9 @@ shift $(( $OPTIND - 1 ))
 
 # Check for sanity and set everithing up
 
+if [ -n "$G_PRIVILEGED_BUILD" ]; then
+    unset G_NO_BUILDKIT
+fi
 setup_img_name
 if [ -n "$G_LIST_ANONYMS_AND_EXIT" ]; then
     list_anonyms
@@ -511,6 +581,9 @@ fi
 cook_timed_tag
 cook_temp_dir
 cook_addusers_script_name
+if [ -n "$G_MAKE_AVAIL" ]; then
+    link_make_available
+fi
 if [ -z "$G_NO_ADDUSERS" ]; then
     cook_addusers_script
 fi
