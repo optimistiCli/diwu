@@ -27,6 +27,11 @@ C_ADDUSERS_VARS='
     USER_GROUP_ID
 '
 C_VARS_FILE_SUFFIX='vars.ini'
+C_VARS_FILE_DIRS="
+    ./
+    $HOME/.diwu/
+    /etc/diwu/
+"
 # Shuld be an even number
 C_MAX_SPLITTER=72
 
@@ -61,7 +66,8 @@ Options:
   -T Build time-tagged image only, do NOT tag it as 'latest'
   -b Use current git branch name for tag
   -e File defining variables for extra templates, if omitted looks for:
-     '<image name>.$C_VARS_FILE_SUFFIX'
+     '<image name>-<tag>.$C_VARS_FILE_SUFFIX' or '<image name>.$C_VARS_FILE_SUFFIX'
+     in $(present_list "$C_VARS_FILE_DIRS")
   -E Do not process templates
   -L List images with timed tag only and exit
   -k Privileged build via BuildKit
@@ -264,13 +270,24 @@ function setup_extra_tag {
     fi
 }
 
+# Depends on setup_extra_tag
 function setup_vars_file {
     if [ -n "$G_VARS_FILE" ]; then
         if ! [ -e "$G_VARS_FILE" ]; then
             brag_and_exit "Strange variables file: '$G_VARS_FILE'"
         fi
     else
-        G_VARS_FILE="${G_IMG_NAME}.$C_VARS_FILE_SUFFIX"
+        for DIR in $C_VARS_FILE_DIRS; do
+            WITH_TAG="${DIR}/${G_IMG_NAME}-${G_EXTRA_TAG}.$C_VARS_FILE_SUFFIX"
+            SANS_TAG="${DIR}/${G_IMG_NAME}.$C_VARS_FILE_SUFFIX"
+            if [ -e "$WITH_TAG" ]; then
+                G_VARS_FILE="$WITH_TAG"
+                break
+            elif [ -e "$SANS_TAG" ]; then
+                G_VARS_FILE="$SANS_TAG"
+                break
+            fi
+        done
         if ! [ -e "$G_VARS_FILE" ]; then
             moan_and_keep_going "No variables file found, extra templates will not be processed"
             G_NO_TEMPLATES=1
